@@ -12,6 +12,19 @@ execution, not a JS reimplementation.
 """
 
 import json
+import os
+import sys
+
+# Make this file's own directory importable regardless of HOW it gets
+# loaded. Vercel's "default location" invocation (api/index.py found
+# directly) adds this file's own directory to sys.path automatically --
+# but the dotted-entrypoint style (web.api.index:app, used when deploying
+# from the repo root instead of web/) imports it as part of a package
+# path, where that implicit same-directory behavior is NOT guaranteed.
+# Without this, `from twig_codec import ...` below could fail with
+# ModuleNotFoundError depending on which of those two ways Vercel chose.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from flask import Flask, request, jsonify
 from twig_codec import encode, decode
 

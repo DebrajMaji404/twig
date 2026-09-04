@@ -29,3 +29,6 @@ Issues = "https://github.com/YOUR_USERNAME/twig/issues"
 
 [tool.setuptools.packages.find]
 include = ["twig*"]
+
+[tool.vercel]
+entrypoint = "web.api.index:app"
