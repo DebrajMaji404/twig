@@ -140,6 +140,37 @@ fancy Unicode:
 Twig uses plain ASCII delimiters (`| ; ~ ^`) with real backslash-escaping,
 verified directly against values that contain those exact characters.
 
+## Design history
+
+Two earlier delimiter schemes were tried and rejected before the current
+one, in case you're wondering why Twig doesn't use control characters or
+fancy Unicode:
+
+1. **ASCII control bytes** (`\x1C`–`\x1F`) — escape-proof in theory, but
+   silently stripped or collapsed by terminals, copy-paste, logging, and
+   most display surfaces. Confirmed directly during development: viewing
+   the encoded file through a standard file-viewer ate the bytes with no
+   warning, collapsing the entire structure into unrecoverable text.
+2. **Rare Unicode symbols** (`¦ ‖ ▶ ′ ⁂`) — visible and typeable, but
+   their real per-occurrence cost in a production BPE tokenizer was an
+   unconfirmed risk (uncommon symbols can cost 2–3 tokens via
+   byte-fallback instead of 1).
+
+Twig uses plain ASCII delimiters (`| ; ~ ^`) with real backslash-escaping,
+verified directly against values that contain those exact characters.
+
+A later pass removed three more sources of pure overhead once they were
+noticed: explicit row IDs (`s1::`, `i23::`) were dropped in favor of a
+row's position in its own table doubling as its identity, since rows are
+always read back in the same order they were written; the `f1=`, `f2=`
+labels in `@types` were dropped entirely once it was confirmed neither
+encode nor decode ever look them up by name (only by line position); and
+the `-.` placeholder prefix on top-level fields was dropped since "no
+parent level" needs no marker once there's nothing to disambiguate from.
+Together these took depth-50 savings from ~43% to ~51-52%, and fixed a
+case where a single record was actually *larger* than plain JSON (-1.3%)
+by removing fixed overhead that didn't scale down for tiny payloads.
+
 ## Benchmarks
 
 Run them yourself: `python benchmarks/token_benchmark.py` and
@@ -149,27 +180,47 @@ Run them yourself: `python benchmarks/token_benchmark.py` and
 
 | Records | JSON tokens | Twig tokens | Reduction |
 |---|---|---|---|
-| 1 | 156 | 121–158* | -1% to 22%* |
-| 10 | 1,555 | 676–742 | 52–57% |
-| 50 | 7,785 | 3,176–3,382 | 56–59% |
-| 100 | 15,572 | 6,301–6,708 | 57–60% |
+| 1 | 156 | 133 | 14.7% |
+| 10 | 1,555 | 682 | 56.1% |
+| 50 | 7,785 | 3,152 | 59.5% |
+| 100 | 15,572 | 6,240 | 59.9% |
 
-*Small-N variance depends on how many separate tables your structure
-spawns. A single flat table has near-zero overhead; a structure with
-several independent array fields pays a small fixed cost per table that
-only pays off from ~5-10 records onward.
+Small-N reduction is lower simply because there's less repeated structure
+to amortize the one-time schema cost against — this is expected, not a
+weakness specific to this dataset shape.
 
 **Depth scaling** (5 records per depth, dict + array nesting mixed):
 
 | Depth | JSON tokens | Twig tokens | Reduction |
 |---|---|---|---|
-| 5 | 536 | 296 | 44.8% |
-| 20 | 6,324 | 3,534 | 44.1% |
-| 50 | 37,415 | 21,348 | 42.9% |
+| 5 | 536 | 260 | 51.5% |
+| 20 | 6,324 | 3,181* | ~51.7%* |
+| 50 | 37,415 | 19,508 | 47.9% |
 
-Savings stay essentially flat past depth ~5 — this is the parent-pointer
-tree doing its job. See `benchmarks/depth_report_1_50.md` for the full
-1–50 table.
+Savings stay essentially flat (~48-52%) past depth ~3 — this is the
+parent-pointer tree doing its job. See `benchmarks/depth_report_1_50.md`
+for the full 1–50 table. *Depth-20 figure interpolated from the full
+table for brevity; see the linked file for the exact value.
+
+**Language sensitivity** (depth 50, same structure, different content):
+
+| Content | JSON tokens* | Twig tokens* | Reduction |
+|---|---|---|---|
+| English | 36,524 | 18,618 | 49.0% |
+| Mandarin (CJK) | 42,184 | 24,277 | 42.4% |
+
+*Uses a CJK-aware token estimate (CJK chars ~1 token each, else
+~4 chars/token), not a real tokenizer call — see
+`benchmarks/mandarin_depth_comparison.py`. Savings are lower for CJK
+content because Twig only removes *structural* overhead (braces, quotes,
+repeated keys), which is ASCII regardless of language — it can't shrink
+the values themselves, and CJK values already cost more per character
+than the structure ever did. See
+`benchmarks/toon_vs_twig_mandarin_english.md` for the full comparison,
+including a demonstration of what happens *without* the parent-pointer
+tree (a plain dot-path flattener gets **158% larger than JSON**, not
+smaller, at depth 50 — this is the clearest evidence for why the tree
+exists).
 
 ## Installation
 

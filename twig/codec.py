@@ -270,29 +270,32 @@ def _immediate_level_and_leaf(path: str, level_codes: dict):
 # ENCODE
 # ---------------------------------------------------------------------------
 
-def _process_table(id_record_pairs, table_code, child_id_counter, table_id_counter, meta=None):
+def _process_table(records, table_code, table_id_counter, parent_meta=None):
     """
     Encodes one table (root, or a child table spawned by a list-of-dicts
     field) and recursively encodes any tables it spawns. Returns a list of
     table-block strings (this table's block first, then descendants).
 
-    `meta`, when given, is {row_id: {"_parent": parent_id, "_idx": idx}}
-    for a CHILD table's own bookkeeping fields. These are kept structurally
-    separate from each row's real data (never merged into the item dict
-    itself) so they can never collide with -- or be double-counted
-    alongside -- a real field of the same row.
+    Rows carry NO explicit id -- a row's identity is simply its position
+    in this table's @rows section (0-based). `parent_meta`, when given, is
+    a list (same order as `records`) of {"_parent": parent_index, "_idx":
+    position} for a CHILD table's own bookkeeping fields, where
+    parent_index is the PARENT row's position in ITS OWN table. This
+    removes the need to write out an explicit id string on every single
+    row (a real, measurable token cost at scale) -- position alone is
+    enough since rows are always read back in the same order they were
+    written.
 
     `table_id_counter` is a single counter SHARED across the entire
     recursion (not reset per call), so every child table gets a globally
-    unique code. Without this, two different array fields at different
-    nesting depths could both get named "t1" locally and collide in the
-    decoder's flat table lookup -- exactly this bug was caught and fixed
-    during testing (see test_nested_arrays.py).
+    unique code -- this one genuinely can't be positional, since a child
+    table is referenced by name from a completely different part of the
+    document (its parent's @arrays section).
     """
-    flat_pairs = [(rid, *_deep_flatten(rec)) for rid, rec in id_record_pairs]
-    scalar_paths, list_paths = _classify_paths(flat_pairs)
+    flat_pairs = [_deep_flatten(rec) for rec in records]
+    scalar_paths, list_paths = _classify_paths([(i, sc, ls) for i, (sc, ls) in enumerate(flat_pairs)])
 
-    is_child_table = meta is not None
+    is_child_table = parent_meta is not None
     if is_child_table:
         scalar_paths = ["_parent", "_idx"] + scalar_paths
 
@@ -304,14 +307,18 @@ def _process_table(id_record_pairs, table_code, child_id_counter, table_id_count
         parent_code = level_codes[parent] if parent else "-"
         tree_lines.append(f"{level_codes[name]}={name}^{parent_code}")
 
-    field_codes = {p: f"f{i+1}" for i, p in enumerate(scalar_paths)}
+    # @types lines are bare path specs, no "fN=" label -- neither encode
+    # nor decode ever look these codes up by name, only by line position,
+    # so the label was pure overhead. Top-level (unnested) fields also
+    # drop the "-." placeholder prefix, since "no level" needs no marker
+    # when there's nothing else it could be confused with.
     type_lines = []
     for p in scalar_paths:
         if p in ("_parent", "_idx"):
-            type_lines.append(f"{field_codes[p]}=-.{p}")
+            type_lines.append(p)
             continue
         lvl, leaf = _immediate_level_and_leaf(p, level_codes)
-        type_lines.append(f"{field_codes[p]}={lvl or '-'}.{leaf}")
+        type_lines.append(f"{lvl}.{leaf}" if lvl else leaf)
 
     array_codes = {}
     array_lines = []
@@ -319,17 +326,20 @@ def _process_table(id_record_pairs, table_code, child_id_counter, table_id_count
         tcode = f"t{next(table_id_counter)}"   # globally unique, not local
         array_codes[p] = tcode
         lvl, leaf = _immediate_level_and_leaf(p, level_codes)
-        array_lines.append(f"{tcode}={lvl or '-'}.{leaf}")
+        path_repr = f"{lvl}.{leaf}" if lvl else leaf
+        array_lines.append(f"{tcode}={path_repr}")   # tcode here IS a real
+        # cross-reference key (looked up by name from a different table's
+        # block during decode), unlike the @types codes above, so it has
+        # to stay as an explicit label.
 
     row_lines = []
-    for rid, sc, ls in flat_pairs:
+    for i, (sc, ls) in enumerate(flat_pairs):
         real_paths = [p for p in scalar_paths if p not in ("_parent", "_idx")]
         # A path classified globally as "scalar" can still have landed in
         # THIS row's `ls` bucket if this specific row's value was an empty
         # list (_deep_flatten routes ALL empty lists to `ls` per-row,
         # before the global scalar-vs-array classification is known). Fall
         # back to `ls` so an empty-list value isn't silently lost as None.
-        # Confirmed as a real bug via stress20 testing before this fix.
         def _lookup(p):
             if p in sc:
                 return sc[p]
@@ -338,9 +348,10 @@ def _process_table(id_record_pairs, table_code, child_id_counter, table_id_count
             return None
         vals = [_encode_field(_lookup(p)) for p in real_paths]
         if is_child_table:
-            m = meta[rid]
+            m = parent_meta[i]
             vals = [_encode_field(m["_parent"]), _encode_field(m["_idx"])] + vals
-        row_lines.append(f"{rid}::" + FIELD_SEP.join(vals))
+        row_lines.append(FIELD_SEP.join(vals))   # no id prefix, no "::" --
+        # this row's identity is just its position in this list.
 
     block = f"table:{table_code}\n"
     if tree_lines:
@@ -354,15 +365,14 @@ def _process_table(id_record_pairs, table_code, child_id_counter, table_id_count
 
     for lpath in list_paths:
         tcode = array_codes[lpath]
-        child_pairs = []
-        child_meta = {}
-        for rid, _, ls in flat_pairs:
+        child_records = []
+        child_meta = []
+        for i, (sc, ls) in enumerate(flat_pairs):
             items = ls.get(lpath) or []
             for idx, item in enumerate(items):
-                child_id = f"i{next(child_id_counter)}"
-                child_pairs.append((child_id, item))
-                child_meta[child_id] = {"_parent": rid, "_idx": idx}
-        blocks.extend(_process_table(child_pairs, tcode, child_id_counter, table_id_counter, meta=child_meta))
+                child_records.append(item)
+                child_meta.append({"_parent": i, "_idx": idx})
+        blocks.extend(_process_table(child_records, tcode, table_id_counter, parent_meta=child_meta))
 
     return blocks
 
@@ -371,11 +381,8 @@ def encode(data) -> str:
     records = data if isinstance(data, list) else [data]
     if not records:
         return ""
-    ids = [f"s{i+1}" for i in range(len(records))]
-    id_record_pairs = list(zip(ids, records))
-    child_id_counter = itertools.count(1)
     table_id_counter = itertools.count(1)
-    blocks = _process_table(id_record_pairs, "root", child_id_counter, table_id_counter, meta=None)
+    blocks = _process_table(records, "root", table_id_counter, parent_meta=None)
     return TABLE_SEP.join(blocks)
 
 
@@ -414,15 +421,20 @@ def _parse_table_block(block: str):
             code = level_parent_code.get(code)
         return ".".join(list(reversed(chain)) + [leaf])
 
-    field_path = {}
+    # @types lines are bare path specs now (no "fN=" label) -- a field's
+    # identity is simply its position in this list, matching the same
+    # position in every @rows line.
     field_order = []
     for line in sections.get("types", []):
-        if not line:
-            continue
-        fcode, rest = line.split("=", 1)
-        lvl, leaf = rest.rsplit(".", 1)
-        field_path[fcode] = leaf if lvl == "-" else full_path(lvl, leaf)
-        field_order.append(fcode)
+        if line == "":
+            field_order.append("")  # placeholder; real data never has an
+            continue                 # empty path, so this only happens
+                                      # if @types itself is legitimately empty
+        if "." in line:
+            lvl, leaf = line.rsplit(".", 1)
+            field_order.append(full_path(lvl, leaf))
+        else:
+            field_order.append(line)
 
     array_path = {}
     array_order = []
@@ -430,22 +442,22 @@ def _parse_table_block(block: str):
         if not line:
             continue
         acode, rest = line.split("=", 1)
-        lvl, leaf = rest.rsplit(".", 1)
-        array_path[acode] = leaf if lvl == "-" else full_path(lvl, leaf)
+        if "." in rest:
+            lvl, leaf = rest.rsplit(".", 1)
+            array_path[acode] = full_path(lvl, leaf)
+        else:
+            array_path[acode] = rest
         array_order.append(acode)
 
-    rows = {}
+    rows = []
     for line in sections.get("rows", []):
-        if not line or "::" not in line:
-            continue
-        rid, valstr = line.split("::", 1)
-        vals = _aware_split(valstr, FIELD_SEP) if valstr else []
+        vals = _aware_split(line, FIELD_SEP) if line else []
         row = {}
-        for fcode, v in zip(field_order, vals):
-            row[fcode] = _decode_field(v)
-        rows[rid] = row
+        for path, v in zip(field_order, vals):
+            row[path] = _decode_field(v)
+        rows.append(row)   # position in this list IS the row's identity
 
-    return table_code, field_path, array_order, array_path, rows
+    return table_code, field_order, array_order, array_path, rows
 
 
 def _unflatten(flat: dict) -> dict:
@@ -468,43 +480,8 @@ def decode(text: str) -> list:
         block = block.strip("\n")
         if not block:
             continue
-        table_code, field_path, array_order, array_path, rows = _parse_table_block(block)
-        tables[table_code] = (field_path, array_order, array_path, rows)
-
-    def build_record(table_code, rid):
-        field_path, array_order, array_path, rows = tables[table_code]
-        row = rows[rid]
-        flat = {}
-        for fcode, path in field_path.items():
-            if path in ("_parent", "_idx"):
-                continue
-            flat[path] = row.get(fcode)
-        record = _unflatten(flat)
-
-        for acode in array_order:
-            child_table_code = acode  # array field code doubles as child table code (t1, t2...)
-            arr_field_path = array_path[acode]
-            if child_table_code not in tables:
-                record_items = []
-            else:
-                c_field_path, c_array_order, c_array_path, c_rows = tables[child_table_code]
-                # find _parent/_idx field codes in child table
-                parent_fcode = idx_fcode = None
-                for fc, p in c_field_path.items():
-                    if p == "_parent":
-                        parent_fcode = fc
-                    elif p == "_idx":
-                        idx_fcode = fc
-                matching = [
-                    (int(_str_to_scalar_safe(r[idx_fcode])), crid)
-                    for crid, r in c_rows.items()
-                    if r.get(parent_fcode) == rid
-                ]
-                matching.sort(key=lambda x: x[0])
-                record_items = [build_record(child_table_code, crid) for _, crid in matching]
-            _set_dotted(record, arr_field_path, record_items)
-
-        return record
+        table_code, field_order, array_order, array_path, rows = _parse_table_block(block)
+        tables[table_code] = (field_order, array_order, array_path, rows)
 
     def _set_dotted(record, path, value):
         parts = path.split(".")
@@ -513,8 +490,29 @@ def decode(text: str) -> list:
             node = node.setdefault(p, {})
         node[parts[-1]] = value
 
-    def _str_to_scalar_safe(v):
-        return v if not isinstance(v, str) else v
+    def build_record(table_code, row_index):
+        field_order, array_order, array_path, rows = tables[table_code]
+        row = rows[row_index]
+        flat = {path: val for path, val in row.items() if path not in ("_parent", "_idx")}
+        record = _unflatten(flat)
 
-    root_field_path, root_array_order, root_array_path, root_rows = tables["root"]
-    return [build_record("root", rid) for rid in root_rows.keys()]
+        for acode in array_order:
+            child_table_code = acode  # array field code doubles as child table code (t1, t2...)
+            arr_field_path = array_path[acode]
+            if child_table_code not in tables:
+                record_items = []
+            else:
+                _, _, _, c_rows = tables[child_table_code]
+                matching = [
+                    (r["_idx"], i)
+                    for i, r in enumerate(c_rows)
+                    if r.get("_parent") == row_index
+                ]
+                matching.sort(key=lambda x: x[0])
+                record_items = [build_record(child_table_code, i) for _, i in matching]
+            _set_dotted(record, arr_field_path, record_items)
+
+        return record
+
+    _, _, _, root_rows = tables["root"]
+    return [build_record("root", i) for i in range(len(root_rows))]
