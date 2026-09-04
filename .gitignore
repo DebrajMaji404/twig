@@ -8,3 +8,5 @@ dist/
 venv/
 *.json
 !examples/*.json
+!web/vercel.json
+!web/package.json

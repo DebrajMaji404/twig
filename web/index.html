@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Twig — compact JSON for LLMs</title>
+<style>
+  :root {
+    --bg: #0f1210;
+    --panel: #171b18;
+    --border: #2a2f2b;
+    --text: #e8ede9;
+    --muted: #8a978c;
+    --accent: #6fcf82;
+    --accent-dim: #3a5c42;
+    --error: #e07856;
+    --mono: "SF Mono", "Fira Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 0;
+  }
+  header {
+    padding: 2rem 2rem 1rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  header h1 {
+    font-size: 1.6rem;
+    margin: 0 0 0.3rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  header p {
+    color: var(--muted);
+    margin: 0;
+    max-width: 640px;
+    line-height: 1.5;
+  }
+  header a { color: var(--accent); }
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1rem 2rem 3rem;
+  }
+  .mode-switch {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .mode-switch button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .mode-switch button.active {
+    color: var(--accent);
+    border-color: var(--accent-dim);
+    background: #14201a;
+  }
+  .panels {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 1rem;
+    align-items: stretch;
+  }
+  @media (max-width: 800px) {
+    .panels { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); margin: 0 auto; }
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+  }
+  .panel-header {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .panel-header .char-count {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+  textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    padding: 1rem;
+    resize: none;
+    outline: none;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  textarea[readonly] { color: #c9d4cb; }
+  .arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 1.4rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button.run {
+    background: var(--accent);
+    color: #0f1210;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button.run:hover { background: #7fdb92; }
+  button.run:disabled { background: var(--accent-dim); color: #6a7d6e; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  button.secondary:hover { border-color: var(--accent-dim); color: var(--accent); }
+  .stats {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .stats .reduction { color: var(--accent); font-weight: 600; }
+  .stats .increase { color: var(--error); font-weight: 600; }
+  .error-banner {
+    background: #2a1712;
+    border: 1px solid var(--error);
+    color: #f2a98e;
+    padding: 0.7rem 1rem;
+    border-radius: 6px;
+    margin-top: 1rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    display: none;
+  }
+  .error-banner.show { display: block; }
+  footer {
+    max-width: 1100px;
+    margin: 2rem auto 0;
+    padding: 1.5rem 2rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  footer a { color: var(--accent); }
+  .limitation {
+    background: #1c1f18;
+    border: 1px solid #3a3d2e;
+    border-radius: 6px;
+    padding: 0.8rem 1rem;
+    margin-top: 1rem;
+    font-size: 0.82rem;
+    color: #c9c9a8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌿 Twig</h1>
+  <p>
+    A compact text encoding for nested JSON that cuts LLM token costs
+    ~50-70% by declaring schema once instead of repeating braces, quotes,
+    and keys per record. Try it below — encoding and decoding run as real
+    Python (the same tested codec from the
+    <a href="https://github.com/YOUR_USERNAME/twig" target="_blank">GitHub repo</a>),
+    not a JS reimplementation.
+  </p>
+</header>
+
+<div class="container">
+
+  <div class="mode-switch">
+    <button id="mode-encode" class="active">JSON → Twig</button>
+    <button id="mode-decode">Twig → JSON</button>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-header">
+        <span id="left-label">Input: JSON</span>
+        <span class="char-count" id="left-count">0 chars</span>
+      </div>
+      <textarea id="left-input" spellcheck="false" placeholder='[{"name": "ffs", "address": {"present": {"city": "Durgapur"}}}]'></textarea>
+    </div>
+
+    <div class="arrow">→</div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span id="right-label">Output: Twig</span>
+        <span class="char-count" id="right-count">0 chars</span>
+      </div>
+      <textarea id="right-output" spellcheck="false" readonly placeholder="Output appears here"></textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="run" id="run-btn">Convert</button>
+    <button class="secondary" id="example-btn">Load example</button>
+    <button class="secondary" id="copy-btn">Copy output</button>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="error-banner" id="error-banner"></div>
+
+  <div class="limitation">
+    <strong>Known limitation:</strong> Twig currently can't distinguish
+    "this field was never present in a record" from "this field is
+    present but null" — every record gets every field declared in the
+    schema. Harmless for most uses; matters if your app depends on
+    key-presence checks. See the
+    <a href="https://github.com/YOUR_USERNAME/twig#known-limitations--read-before-relying-on-this-in-production" target="_blank">README</a>
+    for details and the reproducible test case.
+  </div>
+
+</div>
+
+<footer>
+  Twig is MIT-licensed and open source. This page calls
+  <code>/api/encode</code> and <code>/api/decode</code>, two small Python
+  serverless functions running the exact codec from the repo — nothing
+  here is reimplemented in JavaScript. Token reduction shown is measured
+  in characters (a rough proxy); see the repo's <code>benchmarks/</code>
+  folder for full multi-format comparisons against JSON, XML, YAML, and
+  TOON-style flattening. <a href="https://github.com/YOUR_USERNAME/twig">View source →</a>
+</footer>
+
+<script>
+  let mode = "encode"; // or "decode"
+
+  const leftInput = document.getElementById("left-input");
+  const rightOutput = document.getElementById("right-output");
+  const leftLabel = document.getElementById("left-label");
+  const rightLabel = document.getElementById("right-label");
+  const leftCount = document.getElementById("left-count");
+  const rightCount = document.getElementById("right-count");
+  const runBtn = document.getElementById("run-btn");
+  const exampleBtn = document.getElementById("example-btn");
+  const copyBtn = document.getElementById("copy-btn");
+  const statsEl = document.getElementById("stats");
+  const errorBanner = document.getElementById("error-banner");
+  const modeEncodeBtn = document.getElementById("mode-encode");
+  const modeDecodeBtn = document.getElementById("mode-decode");
+
+  const EXAMPLE = [
+    {
+      name: "ffs",
+      address: {
+        present: { state: "West Bengal", district: "Paschim Bardhaman", pin: "713201" },
+        permanent: { state: "West Bengal", district: "Paschim Bardhaman", pin: "713301" }
+      },
+      experience: [
+        { companyName: "Tata Steel", role: "Engineer", years: 2 },
+        { companyName: "Infosys", role: "Developer", years: 3 }
+      ]
+    },
+    {
+      name: "raj",
+      address: {
+        present: { state: "Bihar", district: "Patna", pin: "800001" },
+        permanent: { state: "Bihar", district: "Gaya", pin: "823001" }
+      },
+      experience: [
+        { companyName: "Wipro", role: "Analyst", years: 1 }
+      ]
+    }
+  ];
+
+  function setMode(newMode) {
+    mode = newMode;
+    modeEncodeBtn.classList.toggle("active", mode === "encode");
+    modeDecodeBtn.classList.toggle("active", mode === "decode");
+    leftLabel.textContent = mode === "encode" ? "Input: JSON" : "Input: Twig";
+    rightLabel.textContent = mode === "encode" ? "Output: Twig" : "Output: JSON";
+    leftInput.placeholder = mode === "encode"
+      ? '[{"name": "ffs", "address": {"present": {"city": "Durgapur"}}}]'
+      : "table:root\\n@types\\nname\\n@rows\\nffs";
+    rightOutput.value = "";
+    statsEl.textContent = "";
+    hideError();
+    updateCounts();
+  }
+
+  modeEncodeBtn.addEventListener("click", () => setMode("encode"));
+  modeDecodeBtn.addEventListener("click", () => setMode("decode"));
+
+  function updateCounts() {
+    leftCount.textContent = `${leftInput.value.length} chars`;
+    rightCount.textContent = `${rightOutput.value.length} chars`;
+  }
+  leftInput.addEventListener("input", updateCounts);
+
+  function showError(msg) {
+    errorBanner.textContent = msg;
+    errorBanner.classList.add("show");
+  }
+  function hideError() {
+    errorBanner.classList.remove("show");
+  }
+
+  exampleBtn.addEventListener("click", () => {
+    if (mode === "encode") {
+      leftInput.value = JSON.stringify(EXAMPLE, null, 2);
+    } else {
+      // run a quick encode client-side-via-API to populate a decode example
+      leftInput.value = "";
+      fetch("/api/encode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ json: EXAMPLE })
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          leftInput.value = data.twig || "";
+          updateCounts();
+        })
+        .catch(() => showError("Could not load example (API unreachable)."));
+    }
+    updateCounts();
+  });
+
+  copyBtn.addEventListener("click", () => {
+    if (!rightOutput.value) return;
+    navigator.clipboard.writeText(rightOutput.value);
+    copyBtn.textContent = "Copied!";
+    setTimeout(() => (copyBtn.textContent = "Copy output"), 1200);
+  });
+
+  runBtn.addEventListener("click", async () => {
+    hideError();
+    statsEl.textContent = "";
+    const raw = leftInput.value.trim();
+    if (!raw) return;
+
+    runBtn.disabled = true;
+    runBtn.textContent = "Working…";
+
+    try {
+      if (mode === "encode") {
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          throw new Error("Input is not valid JSON: " + e.message);
+        }
+        const resp = await fetch("/api/encode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ json: parsed })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "Server error");
+        rightOutput.value = data.twig;
+        const pct = data.reduction_pct;
+        if (pct >= 0) {
+          statsEl.innerHTML = `${data.json_chars} → ${data.twig_chars} chars &nbsp; <span class="reduction">${pct}% smaller</span>`;
+        } else {
+          statsEl.innerHTML = `${data.json_chars} → ${data.twig_chars} chars &nbsp; <span class="increase">${Math.abs(pct)}% larger</span>`;
+        }
+      } else {
+        const resp = await fetch("/api/decode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ twig: raw })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "Server error");
+        rightOutput.value = JSON.stringify(data.json, null, 2);
+        statsEl.textContent = "";
+      }
+      updateCounts();
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = "Convert";
+    }
+  });
+
+  updateCounts();
+</script>
+
+</body>
+</html>
