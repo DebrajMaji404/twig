@@ -10,3 +10,6 @@ venv/
 !examples/*.json
 !web/vercel.json
 !web/package.json
+
+.vercel
+.env*
