@@ -25,10 +25,22 @@ import sys
 # ModuleNotFoundError depending on which of those two ways Vercel chose.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from twig_codec import encode, decode
 
 app = Flask(__name__)
+
+_INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "index.html")
+
+
+@app.route("/")
+def serve_index():
+    # Flask handles every request here (confirmed: without this route,
+    # Flask itself returned "Not Found" for "/", proving requests DO
+    # reach this app correctly -- the missing piece was just this route,
+    # not a Vercel routing/rewrite problem).
+    with open(_INDEX_HTML_PATH, "r", encoding="utf-8") as f:
+        return Response(f.read(), mimetype="text/html")
 
 
 @app.after_request
