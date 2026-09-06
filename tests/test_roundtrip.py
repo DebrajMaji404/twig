@@ -142,3 +142,35 @@ def test_single_item_and_empty_scalar_lists():
         {"name": "c", "tags": ["x", "y", "z"]},
     ]
     assert roundtrip(data) == data
+
+
+def test_single_dict_input_returns_single_dict_not_a_list():
+    """Regression test for a real bug (found via live user testing): a
+    single JSON object passed to encode() -- not a list -- came back
+    from decode() wrapped in an extra list it never had, e.g.
+    {"status": "ok", ...} became [{"status": "ok", ...}]. encode() now
+    records whether the original input was a single dict or a list via
+    a leading @shape: marker, and decode() restores the correct shape."""
+    data = {
+        "status": "success",
+        "meta": {"current_page": 1, "per_page": 10, "total_records": 450},
+        "data": [
+            {"id": "usr_901", "name": "Alice Smith", "created_at": "2026-09-01T10:14:00Z"},
+            {"id": "usr_902", "name": "Bob Jones", "created_at": "2026-09-02T11:22:00Z"},
+        ],
+    }
+    result = roundtrip(data)
+    assert result == data
+    assert isinstance(result, dict)  # not wrapped in a list
+
+
+def test_shape_marker_backward_compatible_with_unmarked_text():
+    """Twig text without a leading @shape: marker (hand-written, or from
+    a version of this codec predating the fix above) has no way to know
+    the original shape, so it falls back to the historical default of
+    always returning a list -- this is a deliberate, documented default,
+    not a silent behavior change for existing unmarked text."""
+    manual_text = "table:root\n@types\nname\n@rows\nffs"
+    result = decode(manual_text)
+    assert result == [{"name": "ffs"}]
+    assert isinstance(result, list)

@@ -378,12 +378,24 @@ def _process_table(records, table_code, table_id_counter, parent_meta=None):
 
 
 def encode(data) -> str:
-    records = data if isinstance(data, list) else [data]
+    """
+    Encodes `data` into compact Twig text. Accepts either a single dict
+    (a "single record") or a list of dicts. The original shape is
+    recorded in a leading "@shape:" marker line so decode() can restore
+    it exactly -- without this, encode(single_dict) and decode() would
+    silently turn a single object into a one-item list, which is a real
+    round-trip bug (found via user testing: a single JSON object with
+    top-level status/meta/data keys came back wrapped in an extra `[ ]`
+    that was never in the original input).
+    """
+    is_list_input = isinstance(data, list)
+    records = data if is_list_input else [data]
     if not records:
         return ""
     table_id_counter = itertools.count(1)
     blocks = _process_table(records, "root", table_id_counter, parent_meta=None)
-    return TABLE_SEP.join(blocks)
+    shape = "list" if is_list_input else "single"
+    return f"@shape:{shape}\n" + TABLE_SEP.join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -472,9 +484,27 @@ def _unflatten(flat: dict) -> dict:
     return root
 
 
-def decode(text: str) -> list:
+def decode(text: str):
+    """
+    Decodes compact Twig text back to Python data. Returns a single dict
+    if the text was produced by encode() on a single dict (signaled by a
+    leading "@shape:single" marker), or a list of dicts otherwise --
+    matching whatever shape was originally passed to encode(), instead of
+    always wrapping everything in a list regardless of the original input.
+
+    Text without a "@shape:" marker (e.g. hand-written Twig, or output
+    from a version of this codec before this fix existed) has no way to
+    signal its intended shape, so it falls back to the historical
+    behavior of always returning a list -- this is the best available
+    default, not a guess at intent.
+    """
     if not text:
         return []
+
+    shape = "list"
+    if text.startswith("@shape:"):
+        marker_line, _, text = text.partition("\n")
+        shape = marker_line[len("@shape:"):].strip()
 
     tables = {}
     for block in text.split(TABLE_SEP):
@@ -516,4 +546,8 @@ def decode(text: str) -> list:
         return record
 
     _, _, _, root_rows = tables["root"]
-    return [build_record("root", i) for i in range(len(root_rows))]
+    result = [build_record("root", i) for i in range(len(root_rows))]
+
+    if shape == "single":
+        return result[0] if result else {}
+    return result
