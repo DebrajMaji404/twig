@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Twig — a compact format for sending nested JSON to LLMs</title>
 <meta name="description" content="Twig cuts LLM input tokens 50-70% by declaring nested JSON schema once instead of repeating it per record. Try the live converter.">
+<script>
+  // Runs before first paint to avoid a flash of the wrong theme: check
+  // a saved preference first, fall back to the OS-level setting, and
+  // apply immediately via a data-theme attribute the CSS below reads.
+  (function () {
+    var saved = localStorage.getItem("twig-theme");
+    var theme = saved || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    if (theme === "light") document.documentElement.setAttribute("data-theme", "light");
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -21,8 +31,28 @@
     --sage-dim:  #4e5c40;
     --amber:     #c99a52;
     --rust:      #c17750;
+    --sage-solid: #7fa35e;
     --sans: "IBM Plex Sans", -apple-system, sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  /* Light theme: same variable names, warm-paper palette instead of
+     bark, so every rule elsewhere in this file needs zero changes --
+     only the values differ. Kept in the same sage/amber family rather
+     than a generic white-and-blue light mode, so it still reads as the
+     same brand, just in daylight. */
+  :root[data-theme="light"] {
+    --bark:      #f6f1e7;
+    --bark-2:    #ece4d2;
+    --bark-3:    #ffffff;
+    --line:      #d8cbae;
+    --line-soft: #e3d8bf;
+    --paper:     #2b2318;
+    --paper-dim: #6b5f4a;
+    --sage:      #4d6a37;
+    --sage-dim:  #a9c290;
+    --amber:     #8a5f20;
+    --rust:      #a1502e;
   }
 
   * { box-sizing: border-box; }
@@ -35,6 +65,7 @@
     margin: 0;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   a { color: var(--sage); text-decoration: none; }
@@ -71,9 +102,24 @@
   }
   .wordmark svg { display: block; }
   .wordmark .dot { color: var(--sage); }
-  nav.top .links { display: flex; gap: 1.6rem; font-size: 0.92rem; }
+  nav.top .links { display: flex; align-items: center; gap: 1.6rem; font-size: 0.92rem; }
   nav.top .links a { color: var(--paper-dim); }
   nav.top .links a:hover { color: var(--paper); text-decoration: none; }
+
+  .theme-toggle {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--bark-2);
+    color: var(--paper-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s, color 0.15s, background-color 0.2s;
+  }
+  .theme-toggle:hover { border-color: var(--sage); color: var(--sage); }
 
   header.hero { padding: 3.6rem 0 2.4rem; }
   .hero-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 3rem; align-items: start; }
@@ -106,7 +152,7 @@
     cursor: pointer;
     border: 1px solid transparent;
   }
-  .btn-primary { background: var(--sage); color: #16210f; }
+  .btn-primary { background: var(--sage-solid); color: #16210f; }
   .btn-primary:hover { background: #a3bd88; text-decoration: none; }
   .btn-ghost { background: transparent; border-color: var(--line); color: var(--paper); }
   .btn-ghost:hover { border-color: var(--paper-dim); text-decoration: none; }
@@ -135,18 +181,18 @@
     height: 46px;
     border-radius: 50%;
     border: none;
-    background: var(--sage);
+    background: var(--sage-solid);
     color: #16210f;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 8px rgba(147, 172, 120, 0.25), 0 0 0 4px rgba(147, 172, 120, 0.08);
+    box-shadow: 0 2px 8px rgba(127, 163, 94, 0.3), 0 0 0 4px rgba(127, 163, 94, 0.1);
     transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
   }
   .swap-btn:hover {
     background: #a8c48c;
-    box-shadow: 0 4px 14px rgba(147, 172, 120, 0.4), 0 0 0 6px rgba(147, 172, 120, 0.12);
+    box-shadow: 0 4px 14px rgba(127, 163, 94, 0.45), 0 0 0 6px rgba(127, 163, 94, 0.14);
     transform: scale(1.08);
   }
   .swap-btn:active { transform: scale(0.9); }
@@ -211,7 +257,7 @@
     cursor: pointer;
   }
   .btn-sm:hover { border-color: var(--sage-dim); }
-  .btn-sm.primary { background: var(--sage); color: #16210f; border-color: var(--sage); font-weight: 600; }
+  .btn-sm.primary { background: var(--sage-solid); color: #16210f; border-color: var(--sage-solid); font-weight: 600; }
   .btn-sm.primary:hover { background: #a3bd88; }
   .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
   .result-line { font-family: var(--mono); font-size: 0.78rem; color: var(--paper-dim); margin-left: auto; }
@@ -296,11 +342,11 @@
   <div class="wrap">
     <div class="wordmark">
       <svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M15 27V6" stroke="#93AC78" stroke-width="2.2" stroke-linecap="round"/>
-        <path d="M15 11L21 6" stroke="#93AC78" stroke-width="2.2" stroke-linecap="round"/>
-        <path d="M15 17L9 12" stroke="#93AC78" stroke-width="2.2" stroke-linecap="round"/>
-        <path d="M21 6C21 6 22.5 3 20.5 2C18.5 1 18 4 18 4C18 4 19 6.5 21 6Z" fill="#C99A52"/>
-        <path d="M9 12C9 12 7.2 9.3 8.8 8C10.4 6.7 11.3 9.4 11.3 9.4C11.3 9.4 10.6 12 9 12Z" fill="#C99A52"/>
+        <path d="M15 27V6" stroke="var(--sage)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M15 11L21 6" stroke="var(--sage)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M15 17L9 12" stroke="var(--sage)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M21 6C21 6 22.5 3 20.5 2C18.5 1 18 4 18 4C18 4 19 6.5 21 6Z" fill="var(--amber)"/>
+        <path d="M9 12C9 12 7.2 9.3 8.8 8C10.4 6.7 11.3 9.4 11.3 9.4C11.3 9.4 10.6 12 9 12Z" fill="var(--amber)"/>
         <circle cx="15" cy="27" r="2" fill="#93AC78"/>
       </svg>
       <span>TWIG<span class="dot">.</span></span>
@@ -310,6 +356,15 @@
       <a href="#how">How it works</a>
       <a href="#benchmarks">Benchmarks</a>
       <a href="https://github.com/DebrajMaji404/twig" target="_blank">GitHub</a>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle light and dark theme">
+        <svg id="icon-sun" width="17" height="17" viewBox="0 0 17 17" fill="none">
+          <circle cx="8.5" cy="8.5" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8.5 1V2.5M8.5 14.5V16M16 8.5H14.5M2.5 8.5H1M13.6 3.4L12.5 4.5M4.5 12.5L3.4 13.6M13.6 13.6L12.5 12.5M4.5 4.5L3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <svg id="icon-moon" width="17" height="17" viewBox="0 0 17 17" fill="none" style="display:none">
+          <path d="M14.5 10.2A6 6 0 017 2.3a6.2 6.2 0 105.9 8.9 6 6 0 011.6-1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
   </div>
 </nav>
@@ -511,12 +566,35 @@ data = decode(text)</div>
   const statsEl = document.getElementById("stats");
   const errorBanner = document.getElementById("error-banner");
   const swapBtn = document.getElementById("swap-btn");
+  const themeToggle = document.getElementById("theme-toggle");
+  const iconSun = document.getElementById("icon-sun");
+  const iconMoon = document.getElementById("icon-moon");
   const tabConvert = document.getElementById("tab-convert");
   const tabAiPrompt = document.getElementById("tab-ai-prompt");
   const panelConvert = document.getElementById("panel-convert");
   const panelAiPrompt = document.getElementById("panel-ai-prompt");
   const aiPromptText = document.getElementById("ai-prompt-text");
   const copyPromptBtn = document.getElementById("copy-prompt-btn");
+
+  // --- theme toggle (light/dark), persisted across visits ------------
+  function applyThemeIcons() {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    iconSun.style.display = isLight ? "none" : "block";
+    iconMoon.style.display = isLight ? "block" : "none";
+  }
+  applyThemeIcons(); // sync icons with whatever the blocking head script already set
+
+  themeToggle.addEventListener("click", () => {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    if (isLight) {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem("twig-theme", "dark");
+    } else {
+      document.documentElement.setAttribute("data-theme", "light");
+      localStorage.setItem("twig-theme", "light");
+    }
+    applyThemeIcons();
+  });
 
   const EXAMPLE = [
     {
