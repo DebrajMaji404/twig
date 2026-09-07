@@ -24,8 +24,8 @@ dependencies = []
 dev = ["pytest"]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/twig"
-Issues = "https://github.com/YOUR_USERNAME/twig/issues"
+Homepage = "https://github.com/DebrajMaji404/twig"
+Issues = "https://github.com/DebrajMaji404/twig/issues"
 
 [tool.setuptools.packages.find]
 include = ["twig*"]

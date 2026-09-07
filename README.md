@@ -229,7 +229,7 @@ pip install -e .
 ```
 
 (Not yet on PyPI — install from a local clone or `pip install
-git+https://github.com/YOUR_USERNAME/twig.git` once pushed.)
+git+https://github.com/DebrajMaji404/twig.git` once pushed.)
 
 ## Usage
 
