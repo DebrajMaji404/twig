@@ -257,6 +257,26 @@ restored = decode(text)
 assert restored == data
 ```
 
+## Command-line usage
+
+```bash
+pip install -e .
+
+twig encode data.json                    # JSON -> Twig, printed to stdout
+twig encode data.json -o data.twig       # or written to a file
+twig encode data.json -o data.twig --stats  # also prints size reduction to stderr
+
+twig decode data.twig                    # Twig -> JSON, pretty-printed to stdout
+twig decode data.twig --compact          # minified instead of pretty
+twig decode data.twig -o data.json       # or written to a file
+
+cat data.json | twig encode -            # reads from stdin with '-'
+```
+
+Exit code is `1` on any error (bad JSON, malformed Twig text, missing
+file) with a clear message on stderr — never a raw Python traceback, so
+it's safe to use in scripts.
+
 ## Running the tests
 
 ```bash
@@ -279,7 +299,6 @@ section above is the honest roadmap, in priority order:
    model write Twig from a prompt and check for correctly-escaped output.
 3. **Confirm real tokenizer savings** — swap the `len/4` approximation
    for `tiktoken` (or your model's actual tokenizer) and report results.
-4. **Add a CLI** — `twig encode file.json`, `twig decode file.txt`.
 
 Issues and PRs welcome.
 
