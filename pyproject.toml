@@ -23,6 +23,9 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest"]
 
+[project.scripts]
+twig = "twig.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/DebrajMaji404/twig"
 Issues = "https://github.com/DebrajMaji404/twig/issues"
