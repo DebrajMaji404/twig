@@ -332,6 +332,14 @@
   footer { padding: 2.5rem 0 3rem; border-top: 1px solid var(--line-soft); }
   footer p { color: var(--paper-dim); font-size: 0.88rem; max-width: 60ch; }
   footer .foot-links { display: flex; gap: 1.4rem; margin-top: 1rem; font-size: 0.88rem; }
+  .site-stats {
+    margin-top: 1.2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line-soft);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--paper-dim);
+  }
 
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
@@ -547,6 +555,7 @@ data = decode(text)</div>
       <a href="https://github.com/DebrajMaji404/twig/blob/main/README.md" target="_blank">Documentation</a>
       <a href="https://github.com/DebrajMaji404/twig/blob/main/LICENSE" target="_blank">MIT License</a>
     </div>
+    <p id="site-stats" class="site-stats" style="display:none"></p>
   </div>
 </footer>
 
@@ -803,7 +812,29 @@ KNOWN LIMITATION: Twig cannot represent "this field was never present in the rec
   });
 
   updateCounts();
+
+  // --- site visitor stats, shown in the footer (see /api/stats) -------
+  fetch("/api/stats")
+    .then((r) => r.json())
+    .then((data) => {
+      if (!data.available) return; // stays hidden until env vars are set
+      const el = document.getElementById("site-stats");
+      if (!el) return;
+      el.textContent = `${data.pageviews.toLocaleString()} page views from ${data.visitors.toLocaleString()} visitors, via Vercel Analytics.`;
+      el.style.display = "block";
+    })
+    .catch(() => {}); // fail silently -- this is a nice-to-have, not core functionality
 </script>
+
+<!--
+  Vercel Web Analytics tracking script. Only starts sending events once
+  Web Analytics is enabled for this project in the Vercel dashboard
+  (Project -> Analytics -> Enable) -- until then this script 404s
+  harmlessly. See web/README.md for full setup, including the separate
+  step needed to DISPLAY the numbers on this page (not just collect
+  them), which requires an access token set as an environment variable.
+-->
+<script defer src="/_vercel/insights/script.js"></script>
 
 </body>
 </html>
