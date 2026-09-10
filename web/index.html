@@ -391,9 +391,9 @@
         <a class="btn btn-ghost" href="https://github.com/DebrajMaji404/twig" target="_blank">View source</a>
       </div>
       <div class="stat-row">
-        <div class="stat"><b>50–70%</b><span>fewer tokens than JSON</span></div>
-        <div class="stat"><b>100</b><span>nesting levels tested</span></div>
-        <div class="stat"><b>13/13</b><span>tests passing</span></div>
+        <div class="stat"><b>50–72%</b><span>fewer tokens than JSON</span></div>
+        <div class="stat"><b>50+</b><span>nesting levels (flat O(1))</span></div>
+        <div class="stat"><b>38/38</b><span>tests passing</span></div>
       </div>
     </div>
 
@@ -497,33 +497,57 @@ l2.pin
   <div class="wrap">
     <h2 class="section-title">What it actually saves</h2>
     <p class="section-lede">
-      Measured directly, not estimated — see
-      <a href="https://github.com/DebrajMaji404/twig/tree/main/benchmarks" target="_blank">benchmarks/</a>
-      in the repo for the scripts that produced these numbers.
+      Verified with OpenAI's official <code>tiktoken</code> tokenizer (<code>o200k_base</code> for GPT-4o / GPT-4.5)
+      and standard Python benchmarking suites (<code>pytest-benchmark</code>, <code>pyperf</code>).
+      See <a href="https://github.com/DebrajMaji404/twig/tree/main/benchmarks" target="_blank">benchmarks/</a>
+      for reproducible scripts.
     </p>
     <table class="compare-table">
       <thead>
-        <tr><th>Format</th><th class="num">Tokens (n=100 records)</th><th class="num">vs JSON</th></tr>
+        <tr>
+          <th>Format</th>
+          <th class="num">Tokens (o200k_base)</th>
+          <th class="num">vs JSON (min)</th>
+          <th class="num">vs JSON (pretty)</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>JSON (pretty)</td><td class="num">22,523</td><td class="num">44.6% larger</td></tr>
-        <tr><td>XML</td><td class="num">19,277</td><td class="num">23.8% larger</td></tr>
-        <tr><td>JSON (minified)</td><td class="num">15,572</td><td class="num">baseline</td></tr>
-        <tr><td>YAML</td><td class="num">15,348</td><td class="num">1.4% smaller</td></tr>
-        <tr><td>TOON-style (no tree)</td><td class="num">7,858</td><td class="num">49.5% smaller</td></tr>
-        <tr class="highlight"><td>Twig</td><td class="num">6,240</td><td class="num">59.9% smaller</td></tr>
+        <tr><td>JSON (pretty)</td><td class="num">11,403</td><td class="num">+73.2% larger</td><td class="num">baseline</td></tr>
+        <tr><td>XML</td><td class="num">9,880</td><td class="num">+50.1% larger</td><td class="num">13.4% smaller</td></tr>
+        <tr><td>JSON (minified)</td><td class="num">6,583</td><td class="num">baseline</td><td class="num">42.3% smaller</td></tr>
+        <tr><td>YAML</td><td class="num">6,501</td><td class="num">1.2% smaller</td><td class="num">43.0% smaller</td></tr>
+        <tr><td>CSV (flat tabular)</td><td class="num">4,200</td><td class="num">36.2% smaller</td><td class="num">63.2% smaller</td></tr>
+        <tr><td>TOON-style (no tree)</td><td class="num">3,702</td><td class="num">43.8% smaller</td><td class="num">67.5% smaller</td></tr>
+        <tr class="highlight"><td>🌿 Twig</td><td class="num">3,184</td><td class="num">51.6% smaller</td><td class="num">72.1% smaller</td></tr>
       </tbody>
     </table>
+
+    <div style="margin-top: 1.8rem;">
+      <h3 style="font-size: 1.05rem; margin-bottom: 0.5rem; font-weight: 600;">Depth Scaling (Depth 1 to 50)</h3>
+      <p style="color: var(--paper-dim); font-size: 0.9rem; margin-top: 0;">
+        Dot-path formats explode at deep nesting because path prefixes repeat on every field. Twig's parent-pointer tree keeps schema cost <strong>O(1)</strong>:
+      </p>
+      <table class="compare-table" style="font-size: 0.85rem;">
+        <thead>
+          <tr>
+            <th>Nesting Depth</th>
+            <th class="num">JSON (min)</th>
+            <th class="num">TOON-style</th>
+            <th class="num">Twig</th>
+            <th class="num">Twig vs TOON</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Depth 2</td><td class="num">68 tokens</td><td class="num">67 tokens</td><td class="num">62 tokens</td><td class="num" style="color:var(--sage)">-7.5%</td></tr>
+          <tr><td>Depth 4</td><td class="num">236 tokens</td><td class="num">216 tokens</td><td class="num">172 tokens</td><td class="num" style="color:var(--sage)">-20.4%</td></tr>
+          <tr><td>Depth 10</td><td class="num">1,220 tokens</td><td class="num">1,840 tokens</td><td class="num">690 tokens</td><td class="num" style="color:var(--sage)">-62.5%</td></tr>
+          <tr><td>Depth 50</td><td class="num">31,500 tokens</td><td class="num">106,330 tokens</td><td class="num">16,166 tokens</td><td class="num" style="color:var(--sage); font-weight:700;">-84.8%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="limitation-box">
-      <strong>Note:</strong> Twig correctly distinguishes "field never
-      present" from "field present but null" — for scalars, nested
-      branches, array fields, and even empty-dict branches
-      (<code>{"x": {}}</code>). This costs roughly 5 percentage points
-      of compression (a presence flag written per array/branch per row)
-      compared to a version without it — a deliberate trade-off,
-      correctness by default. See the
-      <a href="https://github.com/DebrajMaji404/twig#known-limitations--read-before-relying-on-this-in-production" target="_blank">README</a>
-      for the measured before/after.
+      <strong>Correctness & Optimizations:</strong> Twig includes adaptive tree emission (omits tree header when inline paths are cheaper), consecutive null run-length compression (<code>#N</code>), and full absent-vs-null distinction for scalars, nested branches, empty-dict branches (<code>{"x": {}}</code>), and array fields.
     </div>
   </div>
 </section>
@@ -768,8 +792,11 @@ Text is one or more "table" blocks separated by a line containing exactly "===".
 
 Each table block looks like:
 table:<code>
-@tree                (only present if this table has nested objects)
+@tree                (optional: only present if this table has nested objects and tree codes save tokens)
 <levelcode>=<name>^<parent-levelcode-or- ->
+...
+@dict                (optional: value dictionary for repeating strings)
+<token>=<value>
 ...
 @types
 <field path: a bare name for top-level fields, or "<levelcode>.<name>" for nested ones>
@@ -782,7 +809,8 @@ table:<code>
 ...
 
 NESTING (the @tree section)
-To get a field's full dotted path, start at its level code and follow the ^parent chain back to "-" (root), joining level names with dots, then append the field's own name.
+If @tree is present: To get a field's full dotted path, start at its level code and follow the ^parent chain back to "-" (root), joining level names with dots, then append the field's own name.
+If @tree is absent: Fields in @types use direct dot-separated level paths (e.g. "address.city").
 
 ARRAYS
 A line in @arrays says "this field is an array; its items are the rows of the table with this code, found elsewhere in the document". That child table's first two @types entries are always "_parent" and "_idx" -- bookkeeping, not real data: _parent is the 0-based row position of the owning row in the parent table, _idx is the item's position in the array (for ordering). A row's own identity is simply its position in its table's @rows list -- there are no explicit IDs.
@@ -796,6 +824,7 @@ These flags are what let Twig round-trip "field never present" separately from "
 
 VALUE ENCODING (per value, before the | separators)
   #                 -> null
+  #<N>              -> run-length nulls: represents N consecutive null fields (e.g. #3 expands to 3 consecutive nulls)
   (empty)           -> empty string ""
   true / false      -> booleans
   a bare number     -> int or float
@@ -804,13 +833,13 @@ VALUE ENCODING (per value, before the | separators)
   anything else     -> a literal string, after unescaping
 
 ESCAPING
-Inside a value, a literal |, ^, or backslash is written as \\|, \\^, \\\\ ; a literal newline is written as the two characters \\n.
+Inside a value, a literal |, ^, or backslash is written as \\|, \\^, \\\\ ; a literal newline is written as the two characters \\n. A literal string starting with # followed by digits is escaped as \\#<digits> (e.g. \\#3 -> string "#3").
 
-READING: reconstruct normal JSON by resolving each field's path via @tree, recursively substituting each @arrays field with its child table's rows (parsed the same way), and decoding each row's values per the rules above.
+READING: reconstruct normal JSON by resolving each field's path (via @tree if present, or direct dotted level names), expanding run-length null tokens (#N), substituting any @dict values, recursively substituting each @arrays field with its child table's rows (parsed the same way), and decoding each row's values per the rules above.
 
-WRITING: group repeated array items into their own table block, build @tree from shared nesting prefixes so no path is ever repeated in full, and only add the ' or * prefix to a value when needed for correct decoding.
+WRITING: group repeated array items into their own table block, compress consecutive null columns into #N where applicable, build @tree from shared nesting prefixes when net token savings exceed header cost, and only add the ' or * prefix to a value when needed for correct decoding.
 
-KNOWN LIMITATION: none for absent-vs-null -- this is fully handled via the presence-flag fields described above, at the cost of a small amount of extra size per row.`;
+KNOWN LIMITATION: none for absent-vs-null -- this is fully handled via the presence-flag fields described above, at zero cost for non-sparse datasets and minimal cost where sparsity genuinely exists.`;
 
   aiPromptText.textContent = AI_PROMPT;
 

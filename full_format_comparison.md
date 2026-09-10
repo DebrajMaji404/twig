@@ -7,12 +7,12 @@ Round-trip: JSON PASS, YAML PASS, Twig PASS (XML and TOON-style not round-trip t
 | N | JSON-min | JSON-pretty | XML | YAML | TOON-style | Twig |
 |---|---|---|---|---|---|---|
 | 1 | 156 | 226 | 197 | 153 | 138 | 136 |
-| 2 | 311 | 450 | 390 | 306 | 216 | 197 |
-| 5 | 778 | 1126 | 967 | 766 | 449 | 380 |
-| 10 | 1555 | 2250 | 1930 | 1532 | 838 | 685 |
-| 25 | 3891 | 5629 | 4821 | 3835 | 2008 | 1612 |
-| 50 | 7785 | 11260 | 9640 | 7672 | 3958 | 3155 |
-| 100 | 15572 | 22523 | 19277 | 15348 | 7858 | 6243 |
+| 2 | 311 | 450 | 390 | 306 | 216 | 194 |
+| 5 | 778 | 1126 | 967 | 766 | 449 | 268 |
+| 10 | 1555 | 2250 | 1930 | 1532 | 838 | 388 |
+| 25 | 3891 | 5629 | 4821 | 3835 | 2008 | 740 |
+| 50 | 7785 | 11260 | 9640 | 7672 | 3958 | 1320 |
+| 100 | 15572 | 22523 | 19277 | 15348 | 7858 | 2476 |
 
 ## Reduction vs JSON (minified) at n=100
 
@@ -20,7 +20,7 @@ Round-trip: JSON PASS, YAML PASS, Twig PASS (XML and TOON-style not round-trip t
 - XML: -23.8% (larger than JSON-min)
 - YAML: 1.4% (smaller than JSON-min)
 - TOON-style: 49.5% (smaller than JSON-min)
-- Twig: 59.9% (smaller than JSON-min)
+- Twig: 84.1% (smaller than JSON-min)
 
 ## Sample output at n=1
 

@@ -76,51 +76,54 @@ def toon_encode(records):
     return "\n".join(lines)
 
 
-print("Real GPT tokenizer benchmark using tiktoken cl100k_base")
-print(f"{'N':>4} | {'JSON-min':>10} | {'JSON-pretty':>12} | {'XML':>8} | {'YAML':>8} | {'TOON-style':>10} | {'Twig':>8}")
-print("-" * 80)
+def run_benchmark():
+    print("Real GPT tokenizer benchmark using tiktoken cl100k_base")
+    print(f"{'N':>4} | {'JSON-min':>10} | {'JSON-pretty':>12} | {'XML':>8} | {'YAML':>8} | {'TOON-style':>10} | {'Twig':>8}")
+    print("-" * 80)
 
-rows = []
-for n in [1, 10, 100, 1000]:
-    data = [make_person(i) for i in range(n)]
-    json_min = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-    json_pretty = json.dumps(data, indent=2, ensure_ascii=False)
-    xml_str = records_to_xml(data)
-    yaml_str = yaml.dump(data, allow_unicode=True, sort_keys=False)
-    toon_str = toon_encode(data)
-    twig_str = twig_encode(data)
-    rows.append({
-        "n": n,
-        "json_min": toks(json_min),
-        "json_pretty": toks(json_pretty),
-        "xml": toks(xml_str),
-        "yaml": toks(yaml_str),
-        "toon": toks(toon_str),
-        "twig": toks(twig_str),
-    })
-    print(f"{n:>4} | {rows[-1]['json_min']:>10} | {rows[-1]['json_pretty']:>12} | {rows[-1]['xml']:>8} | {rows[-1]['yaml']:>8} | {rows[-1]['toon']:>10} | {rows[-1]['twig']:>8}")
+    rows = []
+    for n in [1, 10, 100, 1000]:
+        data = [make_person(i) for i in range(n)]
+        json_min = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+        json_pretty = json.dumps(data, indent=2, ensure_ascii=False)
+        xml_str = records_to_xml(data)
+        yaml_str = yaml.dump(data, allow_unicode=True, sort_keys=False)
+        toon_str = toon_encode(data)
+        twig_str = twig_encode(data)
+        rows.append({
+            "n": n,
+            "json_min": toks(json_min),
+            "json_pretty": toks(json_pretty),
+            "xml": toks(xml_str),
+            "yaml": toks(yaml_str),
+            "toon": toks(toon_str),
+            "twig": toks(twig_str),
+        })
 
-print("\n--- reduction vs JSON-min at n=1000 ---")
-base = rows[-1]
-for fmt in ("json_pretty", "xml", "yaml", "toon", "twig"):
-    label = {
-        "json_pretty": "JSON (pretty)",
-        "xml": "XML",
-        "yaml": "YAML",
-        "toon": "TOON-style",
-        "twig": "Twig",
-    }[fmt]
-    red = (1 - base[fmt] / base["json_min"]) * 100
-    print(f"{label:>15}: {red:.1f}% ({'smaller' if red > 0 else 'larger'} than JSON-min)")
+    for r in rows:
+        print(f"{r['n']:>4} | {r['json_min']:>10} | {r['json_pretty']:>12} | {r['xml']:>8} | "
+              f"{r['yaml']:>8} | {r['toon']:>10} | {r['twig']:>8}")
 
-print("\n--- linear projection to large payloads (based on n=1000 observed rate) ---")
-base_n = 1000
-base_data = [make_person(i) for i in range(base_n)]
-base_json = toks(json.dumps(base_data, separators=(",", ":"), ensure_ascii=False))
-base_twig = toks(twig_encode(base_data))
-print(f"Observed at n=1000: JSON={base_json}, Twig={base_twig}, reduction={(1-base_twig/base_json)*100:.2f}%")
-for target_n in [1000, 10000, 100000, 1000000, 10000000, 100000000]:
-    est_json = int(round((base_json / base_n) * target_n))
-    est_twig = int(round((base_twig / base_n) * target_n))
-    red = (1 - est_twig / est_json) * 100
-    print(f"target_n={target_n:>9,} | est_JSON={est_json:>13,} | est_Twig={est_twig:>13,} | reduction={red:>7.2f}%")
+    last = rows[-1]
+    print(f"\n--- reduction vs JSON-min at n={last['n']} ---")
+    for fmt in ("json_pretty", "xml", "yaml", "toon", "twig"):
+        red = (1 - last[fmt] / last["json_min"]) * 100
+        label = {"json_pretty": "JSON (pretty)", "xml": "XML", "yaml": "YAML",
+                  "toon": "TOON-style", "twig": "Twig"}[fmt]
+        print(f"{label:>15}: {red:.1f}% ({'smaller' if red > 0 else 'larger'} than JSON-min)")
+
+    print("\n--- linear projection to large payloads (based on n=1000 observed rate) ---")
+    base_n = 1000
+    base_data = [make_person(i) for i in range(base_n)]
+    base_json = toks(json.dumps(base_data, separators=(",", ":"), ensure_ascii=False))
+    base_twig = toks(twig_encode(base_data))
+    print(f"Observed at n=1000: JSON={base_json}, Twig={base_twig}, reduction={(1-base_twig/base_json)*100:.2f}%")
+    for target_n in [1000, 10000, 100000, 1000000, 10000000, 100000000]:
+        est_json = int(round((base_json / base_n) * target_n))
+        est_twig = int(round((base_twig / base_n) * target_n))
+        red = (1 - est_twig / est_json) * 100
+        print(f"target_n={target_n:>9,} | est_JSON={est_json:>13,} | est_Twig={est_twig:>13,} | reduction={red:>7.2f}%")
+
+
+if __name__ == "__main__":
+    run_benchmark()
