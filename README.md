@@ -230,11 +230,8 @@ Twig's Python implementation achieves high throughput without native C extension
 ## Installation
 
 ```bash
-pip install -e .
+pip install twig-format
 ```
-
-(Not yet on PyPI — install from a local clone or `pip install
-git+https://github.com/DebrajMaji404/twig.git` once pushed.)
 
 ## Usage
 
