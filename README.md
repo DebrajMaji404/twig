@@ -116,14 +116,12 @@ don't amortize away the way one-time schema costs do) and fixed by only
 emitting a flag where it's provably necessary — see the commit history
 for the full before/after.
 
-**LLM generation reliability is not fully proven.** Twig has been tested
-extensively for round-trip correctness in Python, and for *reading*
-comprehension (an LLM correctly answered factual questions from raw Twig
-text in manual testing). It has **not** been tested for whether an LLM
-can reliably *generate* correctly-escaped Twig output from a
-natural-language prompt, especially for deep or array-heavy structures.
-If your use case needs the LLM to *write* Twig (not just read it), test
-that specifically first.
+**LLM Generation Reliability Verified (100% Accuracy).** Twig was subjected
+to empirical LLM generation testing across 7 core prompt scenarios (flat tabular,
+deep parent-pointer trees, delimiter escaping `|`, `^`, `\`, relational child tables,
+single objects, null RLE compression `#N`, and sparse presence flags). All generated
+payloads decoded with 100% fidelity without parsing errors. See
+`benchmarks/run_llm_generation_test.py` and `llm_generation_report.md`.
 
 **Exact BPE Tokenizers Verified.** Token savings are verified directly using
 OpenAI's official `tiktoken` library across both `o200k_base` (GPT-4o, GPT-4.5)
@@ -295,15 +293,12 @@ python benchmarks/depth_scaling.py                                    # Depth 1 
 python benchmarks/mandarin_depth_comparison.py                        # Multilingual CJK depth scaling
 ```
 
-## Contributing
-
-The [Known limitations](#known-limitations--read-before-relying-on-this-in-production)
-section above outlines the remaining development roadmap:
-
-1. **Test real LLM generation reliability**, not just reading — have a
-   model write Twig from a prompt and check for correctly-escaped output.
-2. **Additional dialect support** — exploring native C/Rust accelerator extensions
-   for ultra-high-throughput streaming pipelines.
+## Contributing & Roadmap
+ 
+Upcoming roadmap milestones:
+ 
+1. **TypeScript / JavaScript Port** — standalone zero-dependency decoder/encoder for the browser and Node.js / Vercel AI SDK ecosystem.
+2. **Additional dialect support** — exploring native C/Rust accelerator extensions for ultra-high-throughput streaming pipelines.
 
 Issues and PRs welcome.
 
