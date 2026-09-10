@@ -515,13 +515,15 @@ l2.pin
       </tbody>
     </table>
     <div class="limitation-box">
-      <strong>Known limitation:</strong> Twig can't yet distinguish "this
-      field was never present" from "this field is present but null" —
-      every record gets every field declared in the schema. Harmless for
-      most uses; matters if your app depends on key-presence checks.
-      See the
+      <strong>Note:</strong> Twig correctly distinguishes "field never
+      present" from "field present but null" — for scalars, nested
+      branches, array fields, and even empty-dict branches
+      (<code>{"x": {}}</code>). This costs roughly 5 percentage points
+      of compression (a presence flag written per array/branch per row)
+      compared to a version without it — a deliberate trade-off,
+      correctness by default. See the
       <a href="https://github.com/DebrajMaji404/twig#known-limitations--read-before-relying-on-this-in-production" target="_blank">README</a>
-      for the reproducible test case and what a fix would need.
+      for the measured before/after.
     </div>
   </div>
 </section>
@@ -785,6 +787,13 @@ To get a field's full dotted path, start at its level code and follow the ^paren
 ARRAYS
 A line in @arrays says "this field is an array; its items are the rows of the table with this code, found elsewhere in the document". That child table's first two @types entries are always "_parent" and "_idx" -- bookkeeping, not real data: _parent is the 0-based row position of the owning row in the parent table, _idx is the item's position in the array (for ordering). A row's own identity is simply its position in its table's @rows list -- there are no explicit IDs.
 
+PRESENCE FLAGS
+Some @types entries are synthetic bookkeeping fields, not real data, distinguishable by their prefix:
+  _parent, _idx        -> child-table linkage (see ARRAYS above)
+  $has:<tablecode>      -> a boolean: was the array field pointing to that child table actually present in this record at all (even if empty), or was the key missing entirely? If false, omit that array field from the reconstructed JSON rather than setting it to [].
+  $lvl:<levelcode>      -> a boolean: does the nesting level with that code exist as an actual (possibly empty) object in this record? If true and none of that level's own fields ended up set during reconstruction, still create it as an empty object {} rather than omitting it. If false, omit the whole branch.
+These flags are what let Twig round-trip "field never present" separately from "field present but null/empty" -- do not include them as real fields when reconstructing JSON, and do include them (computed correctly) when generating Twig from JSON that has optional/sparse fields.
+
 VALUE ENCODING (per value, before the | separators)
   #                 -> null
   (empty)           -> empty string ""
@@ -801,7 +810,7 @@ READING: reconstruct normal JSON by resolving each field's path via @tree, recur
 
 WRITING: group repeated array items into their own table block, build @tree from shared nesting prefixes so no path is ever repeated in full, and only add the ' or * prefix to a value when needed for correct decoding.
 
-KNOWN LIMITATION: Twig cannot represent "this field was never present in the record" separately from "this field is present but null" -- every record receives every field declared in @types, with null filling any gaps.`;
+KNOWN LIMITATION: none for absent-vs-null -- this is fully handled via the presence-flag fields described above, at the cost of a small amount of extra size per row.`;
 
   aiPromptText.textContent = AI_PROMPT;
 

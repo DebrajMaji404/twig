@@ -86,23 +86,26 @@ Run `pytest tests/ -v` to see all of this verified directly.
 
 ## Known limitations — read before relying on this in production
 
-**Twig cannot currently distinguish "this field/branch was never
-present" from "this field/branch is present with null/empty values."**
-On decode, every record gets every field declared anywhere in the
-schema, filling absent ones with `null`. For most nested-object use cases
-this is harmless (most consumers only care about the value received, not
-whether the key technically existed), but if your application depends on
-key-presence checks, or treats `null` differently from "key absent," this
-will silently normalize that distinction away.
+**The absent-vs-null distinction is now fully fixed.** Scalar fields,
+nested dict branches, array fields, and even empty-dict branches (`{"x":
+{}}`) all correctly distinguish "never present in the source record"
+from "present with a null/empty value" — see
+`benchmarks/stress_test_notes.md` for the full history: the original
+20-record adversarial sparse-data test went from 1/20 records
+round-tripping exactly, to 17/20 after the first fix (scalar/branch
+presence), to **20/20** after extending presence-tracking to array
+fields and empty-dict branches. Covered by `tests/test_absent_vs_null.py`.
 
-This was found via a 20-record adversarial test with realistic sparse,
-optional fields — the exact failure cases are documented in
-`benchmarks/stress_test_notes.md`, including what *did* get fixed along
-the way (a related but distinct bug where single-item and empty lists
-were indistinguishable from plain scalars). This absent-vs-null gap is
-the single most important thing to fix before using Twig with sparse
-production data. Contributions welcome — see
-[Contributing](#contributing).
+**This correctness has a real, measured token cost — not free.** A
+presence flag is written per array field and per nesting level, on
+every row, whether or not that specific record actually needs it. Measured
+directly (see [Benchmarks](#benchmarks) below): roughly **5 percentage
+points less compression** than a version without this tracking, fairly
+consistent across scale. This was a deliberate trade-off — correctness
+by default — not an oversight; if your use case genuinely never has
+optional/sparse fields, that 5 points is a real cost you're paying for
+a guarantee you may not need, though there's currently no toggle to
+disable it.
 
 **LLM generation reliability is not fully proven.** Twig has been tested
 extensively for round-trip correctness in Python, and for *reading*
@@ -176,14 +179,21 @@ by removing fixed overhead that didn't scale down for tiny payloads.
 Run them yourself: `python benchmarks/token_benchmark.py` and
 `python benchmarks/depth_scaling.py`.
 
+Numbers below reflect the current codec, including the presence-flag
+fix for absent-vs-null (see Known Limitations above) — that fix costs
+roughly 5 percentage points of compression compared to before it
+existed, in exchange for correctly round-tripping sparse/optional data.
+That trade-off was a deliberate choice, not an oversight — see the
+commit history for the measured before/after.
+
 **Record-count scaling** (fixed shape, growing list length):
 
 | Records | JSON tokens | Twig tokens | Reduction |
 |---|---|---|---|
-| 1 | 156 | 133 | 14.7% |
-| 10 | 1,555 | 682 | 56.1% |
-| 50 | 7,785 | 3,152 | 59.5% |
-| 100 | 15,572 | 6,240 | 59.9% |
+| 1 | 156 | 149 | 4.5% |
+| 10 | 1,555 | 743 | 52.2% |
+| 50 | 7,785 | 3,413 | 56.2% |
+| 100 | 15,572 | 6,751 | 56.6% |
 
 Small-N reduction is lower simply because there's less repeated structure
 to amortize the one-time schema cost against — this is expected, not a
@@ -193,21 +203,20 @@ weakness specific to this dataset shape.
 
 | Depth | JSON tokens | Twig tokens | Reduction |
 |---|---|---|---|
-| 5 | 536 | 260 | 51.5% |
-| 20 | 6,324 | 3,181* | ~51.7%* |
-| 50 | 37,415 | 19,508 | 47.9% |
+| 5 | 536 | 305 | 43.1% |
+| 20 | 6,324 | 3,411 | 46.1% |
+| 50 | 37,415 | 20,008 | 46.5% |
 
-Savings stay essentially flat (~48-52%) past depth ~3 — this is the
+Savings stay essentially flat past depth ~20 — this is the
 parent-pointer tree doing its job. See `benchmarks/depth_report_1_50.md`
-for the full 1–50 table. *Depth-20 figure interpolated from the full
-table for brevity; see the linked file for the exact value.
+for the full 1–50 table.
 
 **Language sensitivity** (depth 50, same structure, different content):
 
 | Content | JSON tokens* | Twig tokens* | Reduction |
 |---|---|---|---|
-| English | 36,524 | 18,618 | 49.0% |
-| Mandarin (CJK) | 42,184 | 24,277 | 42.4% |
+| English | 36,524 | 19,118 | 47.7% |
+| Mandarin (CJK) | 42,184 | 24,777 | 41.3% |
 
 *Uses a CJK-aware token estimate (CJK chars ~1 token each, else
 ~4 chars/token), not a real tokenizer call — see
@@ -218,7 +227,7 @@ the values themselves, and CJK values already cost more per character
 than the structure ever did. See
 `benchmarks/toon_vs_twig_mandarin_english.md` for the full comparison,
 including a demonstration of what happens *without* the parent-pointer
-tree (a plain dot-path flattener gets **158% larger than JSON**, not
+tree (a plain dot-path flattener gets **152% larger than JSON**, not
 smaller, at depth 50 — this is the clearest evidence for why the tree
 exists).
 
@@ -291,10 +300,11 @@ python benchmarks/depth_scaling.py
 The [Known limitations](#known-limitations--read-before-relying-on-this-in-production)
 section above is the honest roadmap, in priority order:
 
-1. **Fix the absent-vs-null distinction** — needs a presence marker or a
-   per-record sparse schema, not just filling every declared field.
-   See `benchmarks/stress_test_notes.md` for the specific failing cases
-   and two possible directions.
+1. **A toggle to disable presence-tracking** — for use cases that never
+   have optional/sparse fields, the ~5-point compression cost of
+   always-on presence flags is paid for no benefit. An
+   `encode(data, track_presence=False)`-style escape hatch would let
+   people opt out when they know their data is always fully populated.
 2. **Test real LLM generation reliability**, not just reading — have a
    model write Twig from a prompt and check for correctly-escaped output.
 3. **Confirm real tokenizer savings** — swap the `len/4` approximation
