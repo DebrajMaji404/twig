@@ -19,6 +19,9 @@ this specific dataset's vocabulary.
 
 import json
 import random
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 from twig.codec import encode, decode
 
 random.seed(23)

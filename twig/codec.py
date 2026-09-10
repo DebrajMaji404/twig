@@ -50,11 +50,25 @@ LIST_MARK = "*"     # prefixes any list-encoded value, even 0 or 1 items --
 TABLE_SEP = "\n===\n"   # separates table blocks
 
 NULL_TOKEN = "#"
+ABSENT_TOKEN = "!"   # distinct from NULL_TOKEN: marks a field whose key was
+                      # never present in the source record at all, vs. a key
+                      # that's present with an explicit null value. Without
+                      # this distinction, decode() always fills every
+                      # declared schema field for every record, silently
+                      # turning "key never existed" into "key is null" --
+                      # a real bug found via adversarial sparse-data testing
+                      # (see benchmarks/stress_test_notes.md).
 STR_MARK = "'"
 NEWLINE_ESCAPE = ("\n", "\\n")  # (real, escaped) -- handled outside the
                                  # generic char-escape loop since a naive
                                  # replace of "\n" with "\\"+"\n" would still
                                  # contain a real newline
+
+# Sentinel returned by _decode_field for an ABSENT_TOKEN value, distinct
+# from Python's None (which represents an explicit null). build_record
+# checks for this exact object (via `is`) to omit the key entirely rather
+# than setting it to any value at all.
+ABSENT = object()
 
 _SPECIAL_CHARS = (FIELD_SEP, LIST_SEP)
 _NUM_RE = re.compile(r"-?[1-9]\d*|0")
@@ -120,12 +134,17 @@ def _scalar_to_str(v: Any) -> str:
     if v is None:
         return NULL_TOKEN
     if isinstance(v, bool):
-        return "true" if v else "false"
+        return "T" if v else "F"
     if isinstance(v, str):
         needs_mark = (
-            v in ("true", "false", "")
+            v in ("true", "false", "T", "F", "")
             or v == NULL_TOKEN
+            or v == ABSENT_TOKEN
             or v.startswith(LIST_MARK)
+            or v.startswith(STR_MARK)
+            or v.startswith("&")
+            or (v.startswith(ABSENT_TOKEN) and len(v) > 1 and v[1:].isdigit())
+            or (v.startswith(NULL_TOKEN) and len(v) > 1 and v[1:].isdigit())
             or _NUM_RE.fullmatch(v)
             or _FLOAT_RE.fullmatch(v)
         )
@@ -141,9 +160,9 @@ def _str_to_scalar(s: str) -> Any:
         return None
     if s == "":
         return ""
-    if s == "true":
+    if s == "T" or s == "true":
         return True
-    if s == "false":
+    if s == "F" or s == "false":
         return False
     if _NUM_RE.fullmatch(s):
         return int(s)
@@ -164,6 +183,8 @@ def _encode_field(v: Any) -> str:
 
 
 def _decode_field(s: str) -> Any:
+    if s == ABSENT_TOKEN:
+        return ABSENT
     if s.startswith(LIST_MARK):
         content = s[len(LIST_MARK):]
         if content == "":
@@ -183,26 +204,65 @@ def _deep_flatten(d: dict, prefix: str = ""):
     Recurses through plain dicts, returning:
       scalars: {path: value}          -- real scalar/scalar-list leaves
       lists:   {path: raw_list_value} -- fields that are Python lists
+      empty_dicts: [path, ...]        -- dict-valued paths whose value
+                                          was a literal empty dict {}
     A list is classified as a candidate "array of dicts" field if it's
     non-empty and contains dicts, OR if it's simply empty (ambiguous --
-    resolved later by scanning across all rows/records, same fix applied
-    to the original fixed-shape codec for this exact scenario: an empty
-    list must not be silently misread as a scalar/empty-string). A
-    non-empty list of plain scalars (e.g. tags) stays a scalar field,
-    encoded with LIST_SEP as before.
+    resolved later by scanning across all rows/records). A non-empty
+    list of plain scalars (e.g. tags) stays a scalar field.
+
+    An empty dict contributes NOTHING to `scalars`/`lists` (the loop
+    over its keys simply never runs), which loses the fact that the key
+    existed at all -- `empty_dicts` exists specifically to recover that
+    information, since a branch that's ALWAYS either absent or an empty
+    dict (never populated with real content in any record) would
+    otherwise never even get registered as a tree level in the first
+    place, let alone get a presence flag.
     """
-    scalars, lists = {}, {}
+    scalars, lists, empty_dicts = {}, {}, []
     for k, v in d.items():
         path = f"{prefix}.{k}" if prefix else k
         if isinstance(v, dict):
-            sub_s, sub_l = _deep_flatten(v, path)
-            scalars.update(sub_s)
-            lists.update(sub_l)
+            if not v:
+                empty_dicts.append(path)
+            else:
+                sub_s, sub_l, sub_e = _deep_flatten(v, path)
+                scalars.update(sub_s)
+                lists.update(sub_l)
+                empty_dicts.extend(sub_e)
         elif isinstance(v, list) and (not v or isinstance(v[0], dict)):
             lists[path] = v
         else:
             scalars[path] = v
-    return scalars, lists
+    return scalars, lists, empty_dicts
+
+
+_MISSING = object()  # internal-only marker, distinct from ABSENT (the
+                      # public decode-side sentinel) -- used purely to walk
+                      # dict.get() chains without confusing "key missing"
+                      # with "key present, value happens to be None"
+
+
+def _resolve_path(record: dict, path: str):
+    """
+    Walks a dotted path segment-by-segment through the ORIGINAL nested
+    record dict (not the pre-flattened scalar/list maps), distinguishing
+    "this path was never present" from "this path is present with value
+    None". Returns (found: bool, value). If found is False, value is
+    meaningless (always None).
+
+    This exists because dict.get(path, default) alone can't make this
+    distinction once the dict is nested: .get() on a flattened map
+    conflates "key not in map" with "key in map, mapped to None" --
+    exactly the bug this function fixes (see ABSENT_TOKEN docs above).
+    """
+    parts = path.split(".")
+    node = record
+    for i, p in enumerate(parts):
+        if not isinstance(node, dict) or p not in node:
+            return False, None
+        node = node[p]
+    return True, node
 
 
 def _classify_paths(flat_pairs):
@@ -246,23 +306,44 @@ def _classify_paths(flat_pairs):
     return scalar_paths, list_paths
 
 
-def _build_tree(paths: list):
-    """Parent-pointer tree over the dotted-path segments (excluding each
-    path's own leaf name). Returns (level_parent, level_codes)."""
+def _build_tree(paths: list) -> dict:
+    """Parent-pointer chain over the dotted-path segments preceding each
+    path's own leaf name (the leaf itself is never registered as a
+    level -- only what comes before it). Returns level_parent only;
+    level_codes is assigned separately, AFTER any empty-dict-derived
+    levels (see _register_full_chain) are merged in, so every level
+    gets a code regardless of which mechanism discovered it."""
     level_parent = {}
     for p in paths:
         chain = p.split(".")[:-1]
         for i, seg in enumerate(chain):
             parent = chain[i - 1] if i > 0 else None
             level_parent[seg] = parent
-    level_codes = {name: f"l{i+1}" for i, name in enumerate(level_parent.keys())}
-    return level_parent, level_codes
+    return level_parent
+
+
+def _register_full_chain(level_parent: dict, full_path: str) -> None:
+    """
+    Registers EVERY segment of `full_path` as a level, including the
+    path's own final segment -- unlike _build_tree, which only ever
+    registers segments that precede some OTHER leaf. This is what's
+    needed for a branch that's always either absent or an empty dict in
+    every record: it never has a leaf of its own underneath it, so
+    _build_tree alone would never notice it exists at all, and it would
+    never get a presence flag -- silently collapsing "present but
+    empty" into "absent" for exactly the branches most likely to need
+    that distinction.
+    """
+    segs = full_path.split(".")
+    for i, seg in enumerate(segs):
+        if seg not in level_parent:
+            level_parent[seg] = segs[i - 1] if i > 0 else None
 
 
 def _immediate_level_and_leaf(path: str, level_codes: dict):
     chain = path.split(".")
     leaf = chain[-1]
-    immediate = level_codes[chain[-2]] if len(chain) > 1 else None
+    immediate = level_codes.get(chain[-2]) if len(chain) > 1 else None
     return immediate, leaf
 
 
@@ -280,82 +361,291 @@ def _process_table(records, table_code, table_id_counter, parent_meta=None):
     in this table's @rows section (0-based). `parent_meta`, when given, is
     a list (same order as `records`) of {"_parent": parent_index, "_idx":
     position} for a CHILD table's own bookkeeping fields, where
-    parent_index is the PARENT row's position in ITS OWN table. This
-    removes the need to write out an explicit id string on every single
-    row (a real, measurable token cost at scale) -- position alone is
-    enough since rows are always read back in the same order they were
-    written.
+    parent_index is the PARENT row's position in ITS OWN table.
 
     `table_id_counter` is a single counter SHARED across the entire
-    recursion (not reset per call), so every child table gets a globally
-    unique code -- this one genuinely can't be positional, since a child
-    table is referenced by name from a completely different part of the
-    document (its parent's @arrays section).
+    recursion, so every child table gets a globally unique code.
+
+    Presence flags (new): alongside real data fields, each row also
+    carries a boolean per array field ("$has:<tablecode>") and per
+    nesting level ("$lvl:<levelcode>") declared in this table, recording
+    whether that array/branch was genuinely present in the source record
+    -- not just inferable from whether any of its leaves happened to be
+    set. This is what lets decode() tell "array field absent" apart from
+    "array field present but empty", and "branch present as an empty
+    dict" apart from "branch absent entirely" -- neither is inferable
+    from the leaf data alone. This has a real, non-zero token cost (one
+    extra boolean per array/level per row) -- see benchmarks/ for the
+    measured trade-off.
     """
     flat_pairs = [_deep_flatten(rec) for rec in records]
-    scalar_paths, list_paths = _classify_paths([(i, sc, ls) for i, (sc, ls) in enumerate(flat_pairs)])
+    scalar_paths, list_paths = _classify_paths([(i, sc, ls) for i, (sc, ls, _) in enumerate(flat_pairs)])
 
     is_child_table = parent_meta is not None
     if is_child_table:
         scalar_paths = ["_parent", "_idx"] + scalar_paths
 
     all_paths_for_tree = [p for p in scalar_paths if p not in ("_parent", "_idx")] + list_paths
-    level_parent, level_codes = _build_tree(all_paths_for_tree)
+    level_parent = _build_tree(all_paths_for_tree)
+
+    # Also register branches that are ALWAYS either absent or an empty
+    # dict in every record (never populated with real content anywhere),
+    # since _build_tree alone only discovers levels that have some real
+    # leaf underneath them somewhere -- a branch with zero leaves ever
+    # would otherwise never even become a registered level, let alone
+    # get a presence flag.
+    all_empty_dict_paths = set()
+    for _, _, empty_dicts in flat_pairs:
+        all_empty_dict_paths.update(empty_dicts)
+    for ep in all_empty_dict_paths:
+        _register_full_chain(level_parent, ep)
+
+    level_codes = {name: f"l{i+1}" for i, name in enumerate(level_parent.keys())}
+
+    def _level_full_path(name):
+        chain = []
+        cur = name
+        while cur:
+            chain.append(cur)
+            cur = level_parent.get(cur)
+        return ".".join(reversed(chain))
+
+    array_codes = {p: f"t{next(table_id_counter)}" for p in list_paths}
+
+    real_scalar_paths = [p for p in scalar_paths if p not in ("_parent", "_idx")]
+
+    # ---- frequency-sort: most-present real fields first ----
+    # This maximizes trailing-truncation savings (see row building below):
+    # the rarest fields (most likely absent) cluster at the tail where
+    # they can be dropped entirely.
+    _path_freq = {}
+    for p in real_scalar_paths:
+        _path_freq[p] = sum(1 for r in records if _resolve_path(r, p)[0])
+    real_scalar_paths.sort(key=lambda p: -_path_freq[p])
+    # Rebuild scalar_paths with the new sorted order (tree/level code
+    # computation above used the old order but only cares about the SET
+    # of paths, not their sequence).
+    if is_child_table:
+        scalar_paths = ["_parent", "_idx"] + real_scalar_paths
+    else:
+        scalar_paths = list(real_scalar_paths)
+
+    # Only fields/branches whose presence actually VARIES across records
+    # get a flag at all -- one that's present in every single record
+    # costs nothing extra, since decode already defaults to "present"
+    # when no flag exists for it. This matters a lot in practice: most
+    # fields in real data are consistently present, and only a minority
+    # are genuinely optional, so this keeps the presence-tracking cost
+    # proportional to actual sparsity instead of a fixed per-row tax
+    # that never amortizes away, even at very large record counts.
+    array_needs_flag = {
+        p: not all(_resolve_path(r, p)[0] for r in records)
+        for p in list_paths
+    }
+
+    # A level only needs a flag for the specific ambiguous case: present
+    # as a dict, but with NONE of its own leaf fields populated for that
+    # record (the case that would otherwise silently collapse to
+    # "absent"). A level that's always either fully absent, or always
+    # accompanied by real leaf content when present, needs no flag --
+    # natural leaf-based reconstruction already handles both correctly.
+    level_own_leaves = {
+        name: [p for p in real_scalar_paths if p.startswith(_level_full_path(name) + ".")]
+        for name in level_codes
+    }
+    level_needs_flag = {}
+    for name in level_codes:
+        path = _level_full_path(name)
+        leaves = level_own_leaves[name]
+        needs = False
+        for r in records:
+            found, value = _resolve_path(r, path)
+            if found and isinstance(value, dict) and not any(_resolve_path(r, lf)[0] for lf in leaves):
+                needs = True
+                break
+        level_needs_flag[name] = needs
+
+    # Adaptive parent-pointer tree: only emit @tree if the savings from
+    # shortening leaf paths in @types/@arrays exceeds the declaration cost
+    # of the tree itself, or if empty-dict presence flags ($lvl:) require
+    # level codes. For shallow nesting with few fields, direct dotted paths
+    # consume fewer tokens and avoid fixed header overhead.
+    requires_tree = any(level_needs_flag.values())
+    use_tree = True
+    if not requires_tree and level_parent:
+        tree_decl_cost = len("@tree\n") + sum(
+            len(f"{level_codes[name]}={name}^{level_codes[parent] if parent else '-'}\n")
+            for name, parent in level_parent.items()
+        )
+        tree_savings = 0
+        for p in real_scalar_paths + list_paths:
+            chain = p.split(".")
+            if len(chain) > 1:
+                full_prefix = ".".join(chain[:-1])
+                code = level_codes.get(chain[-2], "")
+                tree_savings += max(0, len(full_prefix) - len(code))
+        if tree_savings <= tree_decl_cost:
+            use_tree = False
+            level_codes = {}
 
     tree_lines = []
-    for name, parent in level_parent.items():
-        parent_code = level_codes[parent] if parent else "-"
-        tree_lines.append(f"{level_codes[name]}={name}^{parent_code}")
+    if use_tree:
+        for name, parent in level_parent.items():
+            parent_code = level_codes[parent] if parent else "-"
+            tree_lines.append(f"{level_codes[name]}={name}^{parent_code}")
 
-    # @types lines are bare path specs, no "fN=" label -- neither encode
-    # nor decode ever look these codes up by name, only by line position,
-    # so the label was pure overhead. Top-level (unnested) fields also
-    # drop the "-." placeholder prefix, since "no level" needs no marker
-    # when there's nothing else it could be confused with.
+    array_lines = []
+    for p in list_paths:
+        tcode = array_codes[p]
+        lvl, leaf = _immediate_level_and_leaf(p, level_codes)
+        path_repr = f"{lvl}.{leaf}" if lvl else p
+        array_lines.append(f"{tcode}={path_repr}")
+
+    # Presence-flag field names, appended to the real scalar fields.
+    # "$has:<tcode>" / "$lvl:<levelcode>" can't collide with a real
+    # dotted path (those never contain "$" or ":" unless a source JSON
+    # key itself does, an accepted narrow edge case shared with the
+    # other reserved tokens in this codec, e.g. NULL_TOKEN/STR_MARK).
+    has_flag_paths = {p: f"$has:{array_codes[p]}" for p in list_paths if array_needs_flag[p]}
+    lvl_flag_paths = {name: f"$lvl:{code}" for name, code in level_codes.items() if level_needs_flag.get(name, False)}
+    meta_extra_paths = list(has_flag_paths.values()) + list(lvl_flag_paths.values())
+
+    def _is_meta(p):
+        return p in ("_parent", "_idx") or p.startswith("$has:") or p.startswith("$lvl:")
+
+    # Build @types in truncation-friendly order: bookkeeping fields
+    # first (_parent/_idx, presence flags -- never absent), then real
+    # data fields in frequency-sorted order (rarest last, where
+    # trailing truncation can drop them).
     type_lines = []
     for p in scalar_paths:
         if p in ("_parent", "_idx"):
             type_lines.append(p)
+    type_lines.extend(meta_extra_paths)
+    for p in scalar_paths:
+        if _is_meta(p):
             continue
         lvl, leaf = _immediate_level_and_leaf(p, level_codes)
-        type_lines.append(f"{lvl}.{leaf}" if lvl else leaf)
+        type_lines.append(f"{lvl}.{leaf}" if lvl else p)
 
-    array_codes = {}
-    array_lines = []
-    for p in list_paths:
-        tcode = f"t{next(table_id_counter)}"   # globally unique, not local
-        array_codes[p] = tcode
-        lvl, leaf = _immediate_level_and_leaf(p, level_codes)
-        path_repr = f"{lvl}.{leaf}" if lvl else leaf
-        array_lines.append(f"{tcode}={path_repr}")   # tcode here IS a real
-        # cross-reference key (looked up by name from a different table's
-        # block during decode), unlike the @types codes above, so it has
-        # to stay as an explicit label.
 
-    row_lines = []
-    for i, (sc, ls) in enumerate(flat_pairs):
-        real_paths = [p for p in scalar_paths if p not in ("_parent", "_idx")]
-        # A path classified globally as "scalar" can still have landed in
-        # THIS row's `ls` bucket if this specific row's value was an empty
-        # list (_deep_flatten routes ALL empty lists to `ls` per-row,
-        # before the global scalar-vs-array classification is known). Fall
-        # back to `ls` so an empty-list value isn't silently lost as None.
-        def _lookup(p):
-            if p in sc:
-                return sc[p]
-            if p in ls:
-                return ls[p]
-            return None
-        vals = [_encode_field(_lookup(p)) for p in real_paths]
+    all_row_vals = []
+    for i, (sc, ls, _) in enumerate(flat_pairs):
+        vals = []
+
+        # Bookkeeping fields first (never absent, won't block truncation).
         if is_child_table:
             m = parent_meta[i]
-            vals = [_encode_field(m["_parent"]), _encode_field(m["_idx"])] + vals
-        row_lines.append(FIELD_SEP.join(vals))   # no id prefix, no "::" --
-        # this row's identity is just its position in this list.
+            vals.append(_encode_field(m["_parent"]))
+            vals.append(_encode_field(m["_idx"]))
+
+        # Array presence flags: only for fields whose presence actually
+        # varies across records (see array_needs_flag above).
+        for p in list_paths:
+            if not array_needs_flag[p]:
+                continue
+            found, _ = _resolve_path(records[i], p)
+            vals.append(_encode_field(found))
+
+        # Level (branch) presence flags: only for levels that genuinely
+        # need one (see level_needs_flag above).
+        for name in level_codes:
+            if not level_needs_flag[name]:
+                continue
+            found, value = _resolve_path(records[i], _level_full_path(name))
+            vals.append(_encode_field(found and isinstance(value, dict)))
+
+        # Real data fields last, in frequency-sorted order (rarest fields
+        # at the tail). Resolve each field against the ORIGINAL record
+        # dict so "key never existed" (ABSENT_TOKEN) is distinguished
+        # from "key exists, value is None" (NULL_TOKEN).
+        real_paths = [p for p in scalar_paths if not _is_meta(p)]
+        for p in real_paths:
+            found, value = _resolve_path(records[i], p)
+            vals.append(ABSENT_TOKEN if not found else _encode_field(value))
+
+        # Trailing truncation: drop trailing ABSENT_TOKEN values from
+        # the row. The decoder pads short rows with ABSENT, so missing
+        # trailing positions are implicitly absent -- saving one token
+        # of overhead (the marker + delimiter) per dropped field per row.
+        while vals and vals[-1] == ABSENT_TOKEN:
+            vals.pop()
+
+        all_row_vals.append(vals)
+
+    # Build Value Dictionary (@dict)
+    value_counts = {}
+    for vals in all_row_vals:
+        for val in vals:
+            if (
+                val != ABSENT_TOKEN
+                and val != NULL_TOKEN
+                and val != "T"
+                and val != "F"
+                and not val.startswith("&")
+                and not (val.startswith(ABSENT_TOKEN) and len(val) > 1 and val[1:].isdigit())
+                and not (val.startswith(NULL_TOKEN) and len(val) > 1 and val[1:].isdigit())
+            ):
+                value_counts[val] = value_counts.get(val, 0) + 1
+
+    # Candidate filtering rules:
+    # 1. Frequency rule: must appear more than once (count > 1)
+    # 2. Short character exemption: len(val) > 2 (bypasses 'A', 'AA')
+    # 3. Net byte savings: account for @dict section header on first entry
+    candidates = [(val, cnt) for val, cnt in value_counts.items() if cnt > 1 and len(val) > 2]
+    candidates.sort(key=lambda x: -(x[1] * len(x[0])))
+
+    dict_entries = []
+    val_to_ref = {}
+
+    for val, count in candidates:
+        ref = f"&{len(val_to_ref)}"
+        if len(ref) < len(val):
+            header_cost = 7 if not dict_entries else 0
+            dict_decl_cost = len(ref) + 1 + len(val) + 1 + header_cost
+            savings = count * (len(val) - len(ref))
+            if savings > dict_decl_cost:
+                val_to_ref[val] = ref
+                dict_entries.append(f"{ref}={val}")
+
+    row_lines = []
+    for vals in all_row_vals:
+        if val_to_ref:
+            vals = [val_to_ref.get(v, v) for v in vals]
+
+        compressed_vals = []
+        idx = 0
+        n = len(vals)
+        while idx < n:
+            if vals[idx] == ABSENT_TOKEN:
+                run_start = idx
+                while idx < n and vals[idx] == ABSENT_TOKEN:
+                    idx += 1
+                run_len = idx - run_start
+                if run_len >= 2:
+                    compressed_vals.append(f"{ABSENT_TOKEN}{run_len}")
+                else:
+                    compressed_vals.append(ABSENT_TOKEN)
+            elif vals[idx] == NULL_TOKEN:
+                run_start = idx
+                while idx < n and vals[idx] == NULL_TOKEN:
+                    idx += 1
+                run_len = idx - run_start
+                if run_len >= 2:
+                    compressed_vals.append(f"{NULL_TOKEN}{run_len}")
+                else:
+                    compressed_vals.append(NULL_TOKEN)
+            else:
+                compressed_vals.append(vals[idx])
+                idx += 1
+
+        row_lines.append(FIELD_SEP.join(compressed_vals))
 
     block = f"table:{table_code}\n"
     if tree_lines:
         block += "@tree\n" + "\n".join(tree_lines) + "\n"
+    if dict_entries:
+        block += "@dict\n" + "\n".join(dict_entries) + "\n"
     block += "@types\n" + "\n".join(type_lines) + "\n"
     if array_lines:
         block += "@arrays\n" + "\n".join(array_lines) + "\n"
@@ -367,7 +657,7 @@ def _process_table(records, table_code, table_id_counter, parent_meta=None):
         tcode = array_codes[lpath]
         child_records = []
         child_meta = []
-        for i, (sc, ls) in enumerate(flat_pairs):
+        for i, (sc, ls, _) in enumerate(flat_pairs):
             items = ls.get(lpath) or []
             for idx, item in enumerate(items):
                 child_records.append(item)
@@ -427,12 +717,28 @@ def _parse_table_block(block: str):
         level_parent_code[code] = None if parent_code == "-" else parent_code
 
     def full_path(lvl_code, leaf):
+        if lvl_code in level_name:
+            chain = []
+            code = lvl_code
+            while code:
+                chain.append(level_name[code])
+                code = level_parent_code.get(code)
+            return ".".join(list(reversed(chain)) + [leaf])
+        return f"{lvl_code}.{leaf}"
+
+    # Full dotted path for a LEVEL itself (not a field under it) -- used
+    # to resolve "$lvl:<code>" presence flags back to the branch they
+    # describe, e.g. to know that "$lvl:l2" means "the 'address.present'
+    # branch".
+    def level_only_path(lvl_code):
         chain = []
         code = lvl_code
         while code:
             chain.append(level_name[code])
             code = level_parent_code.get(code)
-        return ".".join(list(reversed(chain)) + [leaf])
+        return ".".join(reversed(chain))
+
+    level_full_paths = {code: level_only_path(code) for code in level_name}
 
     # @types lines are bare path specs now (no "fN=" label) -- a field's
     # identity is simply its position in this list, matching the same
@@ -443,11 +749,13 @@ def _parse_table_block(block: str):
             field_order.append("")  # placeholder; real data never has an
             continue                 # empty path, so this only happens
                                       # if @types itself is legitimately empty
-        if "." in line:
-            lvl, leaf = line.rsplit(".", 1)
-            field_order.append(full_path(lvl, leaf))
-        else:
-            field_order.append(line)
+        pieces = _aware_split(line, FIELD_SEP) if FIELD_SEP in line else [line]
+        for item in pieces:
+            if "." in item:
+                lvl, leaf = item.rsplit(".", 1)
+                field_order.append(full_path(lvl, leaf))
+            else:
+                field_order.append(item)
 
     array_path = {}
     array_order = []
@@ -462,15 +770,38 @@ def _parse_table_block(block: str):
             array_path[acode] = rest
         array_order.append(acode)
 
+    dict_map = {}
+    for line in sections.get("dict", []):
+        if not line:
+            continue
+        ref, val = line.split("=", 1)
+        dict_map[ref] = val
+
     rows = []
     for line in sections.get("rows", []):
-        vals = _aware_split(line, FIELD_SEP) if line else []
+        raw_vals = _aware_split(line, FIELD_SEP) if line else []
+        vals = []
+        for v in raw_vals:
+            if v in dict_map:
+                v = dict_map[v]
+            if v.startswith(ABSENT_TOKEN) and len(v) > 1 and v[1:].isdigit():
+                vals.extend([ABSENT_TOKEN] * int(v[1:]))
+            elif v.startswith(NULL_TOKEN) and len(v) > 1 and v[1:].isdigit():
+                vals.extend([NULL_TOKEN] * int(v[1:]))
+            else:
+                vals.append(v)
         row = {}
-        for path, v in zip(field_order, vals):
-            row[path] = _decode_field(v)
+        for idx, path in enumerate(field_order):
+            if idx < len(vals):
+                row[path] = _decode_field(vals[idx])
+            else:
+                # Trailing truncation: the encoder drops trailing absent
+                # values; any position beyond the row's actual length is
+                # implicitly absent.
+                row[path] = ABSENT
         rows.append(row)   # position in this list IS the row's identity
 
-    return table_code, field_order, array_order, array_path, rows
+    return table_code, field_order, array_order, array_path, rows, level_full_paths
 
 
 def _unflatten(flat: dict) -> dict:
@@ -511,8 +842,8 @@ def decode(text: str):
         block = block.strip("\n")
         if not block:
             continue
-        table_code, field_order, array_order, array_path, rows = _parse_table_block(block)
-        tables[table_code] = (field_order, array_order, array_path, rows)
+        table_code, field_order, array_order, array_path, rows, level_full_paths = _parse_table_block(block)
+        tables[table_code] = (field_order, array_order, array_path, rows, level_full_paths)
 
     def _set_dotted(record, path, value):
         parts = path.split(".")
@@ -522,18 +853,54 @@ def decode(text: str):
         node[parts[-1]] = value
 
     def build_record(table_code, row_index):
-        field_order, array_order, array_path, rows = tables[table_code]
+        field_order, array_order, array_path, rows, level_full_paths = tables[table_code]
         row = rows[row_index]
-        flat = {path: val for path, val in row.items() if path not in ("_parent", "_idx")}
+        # Skip ABSENT fields, and the "_parent"/"_idx"/"$has:"/"$lvl:"
+        # bookkeeping fields, entirely -- not even setting them to None.
+        # `is` comparison for ABSENT is intentional: it's a specific
+        # sentinel object, never a value that could equal it by coincidence.
+        flat = {
+            path: val for path, val in row.items()
+            if not (path in ("_parent", "_idx") or path.startswith("$has:") or path.startswith("$lvl:"))
+            and val is not ABSENT
+        }
         record = _unflatten(flat)
 
+        # Level (branch) presence: force-create an empty dict for a
+        # branch that's flagged present but has none of its own leaves
+        # set (an empty dict has no leaf field to have carried this
+        # information any other way). Skipped if the branch already got
+        # created by some leaf under it -- this only fills the gap for
+        # the genuinely-empty-dict case. Old Twig text without "$lvl:"
+        # flags (predating this fix) simply has no such entries in
+        # `row`, so this loop does nothing for it -- falls back to the
+        # previous behavior (an empty-dict branch collapses to absent).
+        for path, val in row.items():
+            if not path.startswith("$lvl:") or val is not True:
+                continue
+            code = path[len("$lvl:"):]
+            branch_path = level_full_paths.get(code)
+            if branch_path is None:
+                continue
+            found, _ = _resolve_path(record, branch_path)
+            if not found:
+                _set_dotted(record, branch_path, {})
+
         for acode in array_order:
+            # Array presence: was this array key in the source record at
+            # all? Missing "$has:" entries (old Twig text predating this
+            # fix) default to True, preserving the previous behavior of
+            # always setting the array (never omitting it).
+            has_flag = row.get(f"$has:{acode}", True)
+            if has_flag is False:
+                continue  # genuinely absent -- do not set this key at all
+
             child_table_code = acode  # array field code doubles as child table code (t1, t2...)
             arr_field_path = array_path[acode]
             if child_table_code not in tables:
                 record_items = []
             else:
-                _, _, _, c_rows = tables[child_table_code]
+                _, _, _, c_rows, _ = tables[child_table_code]
                 matching = [
                     (r["_idx"], i)
                     for i, r in enumerate(c_rows)
@@ -545,7 +912,7 @@ def decode(text: str):
 
         return record
 
-    _, _, _, root_rows = tables["root"]
+    _, _, _, root_rows, _ = tables["root"]
     result = [build_record("root", i) for i in range(len(root_rows))]
 
     if shape == "single":
