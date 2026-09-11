@@ -262,15 +262,32 @@ assert restored == data
 ```bash
 pip install -e .
 
-twig encode data.json                    # JSON -> Twig, printed to stdout
-twig encode data.json -o data.twig       # or written to a file
-twig encode data.json -o data.twig --stats  # also prints size reduction to stderr
+twig encode data.json                            # JSON -> Twig, printed to stdout
+twig encode data.json -o data.twig               # or written to a file
+twig encode data.json -o data.twig --stats       # prints character reduction to stderr
+twig encode data.json -o data.twig --stats --tokens # prints token count & reduction using tiktoken
 
-twig decode data.twig                    # Twig -> JSON, pretty-printed to stdout
-twig decode data.twig --compact          # minified instead of pretty
-twig decode data.twig -o data.json       # or written to a file
+twig decode data.twig                            # Twig -> JSON, pretty-printed to stdout
+twig decode data.twig --compact                  # minified instead of pretty
+twig decode data.twig -o data.json               # or written to a file
 
-cat data.json | twig encode -            # reads from stdin with '-'
+twig benchmark data.json                         # renders comparison table across JSON, YAML, and Twig
+cat data.json | twig benchmark -                 # benchmark directly from stdin pipe
+```
+
+## LangChain & RAG Integration
+
+Twig provides drop-in context compression for LangChain pipelines:
+
+```python
+from twig.integrations.langchain import TwigDocumentCompressor, format_docs_as_twig
+
+# Format retrieved documents to compact Twig text:
+compact_context = format_docs_as_twig(retrieved_docs)
+
+# Or plug directly into an LCEL RAG chain:
+compressor = TwigDocumentCompressor()
+rag_chain = retriever | compressor | prompt_template | llm
 ```
 
 Exit code is `1` on any error (bad JSON, malformed Twig text, missing

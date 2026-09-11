@@ -69,11 +69,26 @@ def api_encode():
         twig_chars = len(twig_text)
         reduction = (1 - twig_chars / json_chars) * 100 if json_chars else 0
 
+        # Token counts (o200k_base or heuristic fallback)
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("o200k_base")
+            json_tokens = len(enc.encode(json_str, disallowed_special=()))
+            twig_tokens = len(enc.encode(twig_text, disallowed_special=()))
+        except Exception:
+            json_tokens = max(1, int(json_chars / 3.8))
+            twig_tokens = max(1, int(twig_chars / 3.8))
+
+        token_reduction = (1 - twig_tokens / json_tokens) * 100 if json_tokens else 0
+
         return jsonify({
             "twig": twig_text,
             "json_chars": json_chars,
             "twig_chars": twig_chars,
             "reduction_pct": round(reduction, 1),
+            "json_tokens": json_tokens,
+            "twig_tokens": twig_tokens,
+            "token_reduction_pct": round(token_reduction, 1),
         })
     except Exception as e:
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 400
