@@ -201,16 +201,25 @@ strictly **O(1)** per field:
 
 *At depth 50, TOON-style dot paths consume over 106K tokens, while Twig uses only 16K tokens — an **84.8% reduction** over TOON.*
 
-### Large-Scale Projections (1K to 100M Records)
+### Large-Scale Token Projections (10K to 10,000M Tokens)
 
-| Workload | Records | JSON (min) | TOON-style | Twig | Twig vs JSON | Twig vs TOON |
-|---|---|---|---|---|---|---|
-| **Dense** | 1,000 | 185 KB | 106 KB | 101 KB | **-45.4%** | -4.7% |
-| **Dense** | 100,000,000 | 18.5 GB | 10.6 GB | 10.1 GB | **-45.4%** | -4.7% |
-| **Sparse** (missing fields) | 1,000 | 148 KB | 78 KB | 76 KB | **-48.6%** | -2.6% |
-| **Sparse** | 100,000,000 | 14.8 GB | 7.8 GB | 7.6 GB | **-48.6%** | -2.6% |
-| **Nested Arrays** (multi-table) | 1,000 | 288 KB | 193 KB | 152 KB | **-47.2%** | **-21.2% (Twig wins)** |
-| **Nested Arrays** | 100,000,000 | 28.8 GB | 19.3 GB | 15.2 GB | **-47.2%** | **-21.2% (Twig wins)** |
+| Workload | Baseline JSON-min | TOON-style Tokens | Twig Tokens | Twig vs JSON-min | Twig vs TOON | Input $ Saved (GPT-4o) | Output $ Saved (GPT-4o) |
+|---|---|---|---|---|---|---|---|
+| **Dense** | 10K tokens | 5,768 | **5,552** | **-44.5%** | **-3.7% (Twig wins)** | $0.01 | $0.04 |
+| **Dense** | 100K tokens | 58,013 | **53,691** | **-46.6%** | **-7.5% (Twig wins)** | $0.11 | $0.46 |
+| **Dense** | 1M tokens | 597,878 | **547,116** | **-46.6%** | **-8.5% (Twig wins)** | $1.19 | $4.76 |
+| **Dense** | 100M tokens | 58,966,441 | **56,282,473** | **-43.7%** | **-4.6% (Twig wins)** | $109.29 | $437.17 |
+| **Dense** | 1,000M tokens (1B) | 600,428,094 | **574,292,423** | **-42.6%** | **-4.4% (Twig wins)** | $1,064.27 | $4,257.08 |
+| **Dense** | 10,000M tokens (10B) | 6,015,044,526 | **5,754,391,826** | **-42.5%** | **-4.3% (Twig wins)** | $10,614.02 | $42,456.08 |
+| **Sparse** (missing fields) | 10K tokens | 5,199 | **4,730** | **-52.5%** | **-9.0% (Twig wins)** | $0.01 | $0.05 |
+| **Sparse** | 100K tokens | 52,557 | **47,379** | **-52.9%** | **-9.8% (Twig wins)** | $0.13 | $0.53 |
+| **Sparse** | 1M tokens | 539,167 | **486,899** | **-52.3%** | **-9.7% (Twig wins)** | $1.33 | $5.33 |
+| **Sparse** | 100M tokens | 53,613,968 | **48,934,707** | **-51.1%** | **-8.7% (Twig wins)** | $127.66 | $510.65 |
+| **Sparse** | 1,000M tokens (1B) | 546,327,954 | **500,563,098** | **-49.9%** | **-8.4% (Twig wins)** | $1,248.59 | $4,994.37 |
+| **Sparse** | 10,000M tokens (10B) | 5,473,467,816 | **5,016,847,011** | **-49.8%** | **-8.3% (Twig wins)** | $12,457.88 | $49,831.53 |
+| **Nested Arrays** (multi-table) | 1M tokens | 663,797 | **536,372** | **-46.4%** | **-19.2% (Twig wins)** | $1.16 | $4.64 |
+| **Nested Arrays** | 1,000M tokens (1B) | 667,605,364 | **541,586,103** | **-45.8%** | **-18.9% (Twig wins)** | $1,146.03 | $4,584.14 |
+| **Nested Arrays** | 10,000M tokens (10B) | 6,682,028,419 | **5,424,100,631** | **-45.8%** | **-18.8% (Twig wins)** | $11,439.75 | $45,758.99 |
 
 ### Language Sensitivity (Mandarin CJK vs English)
 

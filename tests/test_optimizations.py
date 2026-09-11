@@ -77,13 +77,15 @@ def test_string_literal_escapes_roundtrip():
 
 
 def test_run_length_null_compression():
-    # Multiple interior explicit null fields should be compressed into #N
+    # Multiple interior explicit null fields should be encoded as empty fields (||)
+    # BPE-aware optimization: |||| is 1 token vs |#|#|#| at 6+ tokens
     data = [
         {"a": 1, "b": None, "c": None, "d": None, "e": 5},
         {"a": 2, "b": None, "c": None, "d": 4, "e": 5},
     ]
     encoded = encode(data)
-    assert "#3" in encoded or "#2" in encoded
+    # Consecutive nulls produce consecutive empty fields (|||)
+    assert "|||" in encoded
     decoded = decode(encoded)
     assert decoded == data
 

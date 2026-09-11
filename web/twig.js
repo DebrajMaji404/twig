@@ -2,6 +2,7 @@
  * Twig JavaScript Codec (twig.js)
  * Pure, zero-dependency browser and Node.js implementation of the Twig serialization format.
  * Enables zero-latency in-browser encoding, decoding, and token estimation.
+ * Supports Twig 2.0 specification with backward compatibility for legacy text.
  */
 
 (function (root, factory) {
@@ -15,23 +16,36 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  const FIELD_SEP = '|';
+  const LIST_SEP = '^';
+  const LIST_MARK = '*';
+  const STR_MARK = "'";
+  const ABSENT_TOKEN = '!';
+  const NULL_TOKEN = '';
+  const OLD_NULL_TOKEN = '#';
+  const LIST_NULL = '#';
+  const ABSENT = Symbol('ABSENT');
+
+  const NUM_RE = /^-?[1-9]\d*|0$/;
+  const FLOAT_RE = /^-?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+|-?\d+\.\d+$/;
+
   // --- Escaping utilities ---
   function escapeValue(val) {
     if (typeof val !== 'string') return String(val);
     return val
       .replace(/\\/g, '\\\\')
-      .replace(/\|/g, '\\|')
-      .replace(/\^/g, '\\^')
       .replace(/\n/g, '\\n')
-      .replace(/^#(?=\d+)/, '\\#');
+      .replace(/\|/g, '\\|')
+      .replace(/\^/g, '\\^');
   }
 
   function unescapeValue(val) {
     if (typeof val !== 'string') return val;
     let res = '';
     let i = 0;
-    while (i < val.length) {
-      if (val[i] === '\\' && i + 1 < val.length) {
+    const n = val.length;
+    while (i < n) {
+      if (val[i] === '\\' && i + 1 < n) {
         const next = val[i + 1];
         if (next === 'n') res += '\n';
         else res += next;
@@ -44,27 +58,71 @@
     return res;
   }
 
-  function decodeScalar(raw) {
-    if (raw === '#') return null;
-    if (raw === 'true') return true;
-    if (raw === 'false') return false;
-    if (raw === '') return '';
+  function awareSplit(s, sep) {
+    if (!s.includes('\\')) return s.split(sep);
+    const parts = [];
+    const buf = [];
+    let i = 0;
+    const n = s.length;
+    while (i < n) {
+      const c = s[i];
+      if (c === '\\' && i + 1 < n) {
+        buf.push(c, s[i + 1]);
+        i += 2;
+        continue;
+      }
+      if (c === sep) {
+        parts.push(buf.join(''));
+        buf.length = 0;
+        i++;
+        continue;
+      }
+      buf.push(c);
+      i++;
+    }
+    parts.push(buf.join(''));
+    return parts;
+  }
 
-    if (raw.startsWith("'")) {
+  function splitPath(path) {
+    if (!path.includes('.')) {
+      return [path.includes('\\') ? path.replace(/\\\./g, '.').replace(/\\\\/g, '\\') : path];
+    }
+    if (!path.includes('\\')) {
+      return path.split('.');
+    }
+    const parts = path.split(/(?<!\\)\./);
+    return parts.map((p) => p.replace(/\\(.)/g, '$1'));
+  }
+
+  function escapeKey(k) {
+    if (k.includes('.') || k.includes('\\')) {
+      return k.replace(/\\/g, '\\\\').replace(/\./g, '\\.');
+    }
+    return k;
+  }
+
+  function decodeScalar(raw) {
+    if (raw.startsWith(STR_MARK)) {
       return unescapeValue(raw.slice(1));
     }
+    if (raw === NULL_TOKEN || raw === OLD_NULL_TOKEN) {
+      return null;
+    }
+    if (raw === 'T' || raw === 'true') return true;
+    if (raw === 'F' || raw === 'false') return false;
 
-    if (raw.startsWith('*')) {
+    if (raw.startsWith(LIST_MARK)) {
       const rest = raw.slice(1);
       if (rest === '') return [];
-      const parts = rest.split('^');
-      return parts.map((p) => decodeScalar(unescapeValue(p)));
+      const parts = awareSplit(rest, LIST_SEP);
+      return parts.map((p) => (p === LIST_NULL ? null : decodeScalar(p)));
     }
 
-    if (/^-?\d+$/.test(raw)) {
+    if (NUM_RE.test(raw)) {
       return parseInt(raw, 10);
     }
-    if (/^-?\d+\.\d+$/.test(raw)) {
+    if (FLOAT_RE.test(raw)) {
       return parseFloat(raw);
     }
 
@@ -72,251 +130,342 @@
   }
 
   function encodeScalar(val) {
-    if (val === null || val === undefined) return '#';
-    if (typeof val === 'boolean') return val ? 'true' : 'false';
+    if (val === null || val === undefined) return NULL_TOKEN;
+    if (typeof val === 'boolean') return val ? 'T' : 'F';
     if (typeof val === 'number') return String(val);
     if (Array.isArray(val)) {
-      if (val.length === 0) return '*';
-      return '*' + val.map((item) => escapeValue(encodeScalar(item))).join('^');
+      if (val.length === 0) return LIST_MARK;
+      return LIST_MARK + val.map((item) => (item === null || item === undefined ? LIST_NULL : encodeScalar(item))).join(LIST_SEP);
     }
     if (typeof val === 'string') {
-      if (val === '') return '';
-      if (
+      const needsMark = (
         val === 'true' ||
         val === 'false' ||
-        val === '#' ||
-        /^-?\d+(\.\d+)?$/.test(val) ||
-        val.startsWith("'") ||
-        val.startsWith('*') ||
-        /^#\d+$/.test(val)
-      ) {
-        return "'" + escapeValue(val);
-      }
-      return escapeValue(val);
+        val === 'T' ||
+        val === 'F' ||
+        val === '' ||
+        val === ABSENT_TOKEN ||
+        val === OLD_NULL_TOKEN ||
+        val.startsWith(LIST_MARK) ||
+        val.startsWith(STR_MARK) ||
+        val.startsWith('&') ||
+        (val.startsWith(ABSENT_TOKEN) && val.length > 1 && /^\d+$/.test(val.slice(1))) ||
+        (val.startsWith(OLD_NULL_TOKEN) && val.length > 1 && /^\d+$/.test(val.slice(1))) ||
+        NUM_RE.test(val) ||
+        FLOAT_RE.test(val)
+      );
+      const escaped = escapeValue(val);
+      return needsMark ? STR_MARK + escaped : escaped;
     }
     return escapeValue(String(val));
   }
 
   // --- Parser / Decoder ---
   function decode(text) {
-    const lines = text.split(/\r?\n/);
-    if (!lines.length) return [];
+    if (!text) return [];
 
-    let isSingle = false;
-    let lineIdx = 0;
-
-    if (lines[0].startsWith('@shape:')) {
-      if (lines[0].trim() === '@shape:single') isSingle = true;
-      lineIdx++;
+    let shape = 'list';
+    let content = text;
+    if (content.startsWith('~L\n') || content.startsWith('~L\r\n')) {
+      shape = 'list';
+      content = content.replace(/^~L\r?\n/, '');
+    } else if (content.startsWith('~S\n') || content.startsWith('~S\r\n')) {
+      shape = 'single';
+      content = content.replace(/^~S\r?\n/, '');
+    } else if (content.startsWith('@shape:')) {
+      const firstLineEnd = content.indexOf('\n');
+      const marker = content.slice(0, firstLineEnd).trim();
+      shape = marker.slice('@shape:'.length).trim();
+      content = content.slice(firstLineEnd + 1);
     }
 
-    const tableBlocks = [];
-    let currentBlock = [];
-
-    for (; lineIdx < lines.length; lineIdx++) {
-      const line = lines[lineIdx];
-      if (line.trim() === '===') {
-        if (currentBlock.length) {
-          tableBlocks.push(currentBlock);
-          currentBlock = [];
-        }
-      } else {
-        currentBlock.push(line);
-      }
-    }
-    if (currentBlock.length) tableBlocks.push(currentBlock);
-
+    const rawBlocks = content.split(/\r?\n===\r?\n/);
     const tables = {};
 
-    for (const block of tableBlocks) {
-      if (!block.length) continue;
-      let tableName = 'root';
-      const first = block[0].trim();
-      let startI = 0;
-      if (first.startsWith('table:')) {
-        tableName = first.slice(6).trim();
-        startI = 1;
+    for (const rawBlock of rawBlocks) {
+      const block = rawBlock.trim();
+      if (!block) continue;
+      const lines = block.split(/\r?\n/);
+
+      let tableCode = 'root';
+      const firstLine = lines[0].trim();
+      if (firstLine.startsWith('T:')) {
+        tableCode = firstLine.slice(2).trim();
+      } else if (firstLine.startsWith('table:')) {
+        tableCode = firstLine.slice(6).trim();
       }
 
-      let section = null;
-      const treeLines = [];
-      const typesList = [];
-      const arraysLines = [];
-      const dictEntries = {};
-      const rowsList = [];
+      const sections = {};
+      let currentSection = null;
 
-      for (let i = startI; i < block.length; i++) {
-        const rawLine = block[i];
-        const trimmed = rawLine.trim();
-        if (!trimmed && section !== '@rows') continue;
-
-        if (trimmed.startsWith('@')) {
-          section = trimmed;
-          continue;
-        }
-
-        if (section === '@tree') {
-          if (trimmed) treeLines.push(trimmed);
-        } else if (section === '@types') {
-          if (trimmed) typesList.push(trimmed);
-        } else if (section === '@arrays') {
-          if (trimmed) arraysLines.push(trimmed);
-        } else if (section === '@dict') {
-          const eqIdx = trimmed.indexOf('=');
-          if (eqIdx !== -1) {
-            dictEntries[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1);
-          }
-        } else if (section === '@rows') {
-          if (trimmed !== '') rowsList.push(rawLine);
-        }
-      }
-
-      // Resolve tree
-      const parentMap = {};
-      for (const tline of treeLines) {
-        const [code, rest] = tline.split('=');
-        if (code && rest) {
-          const [seg, pcode] = rest.split('^');
-          parentMap[code.trim()] = { seg: seg.trim(), parent: pcode ? pcode.trim() : '-' };
-        }
-      }
-
-      function resolvePath(field) {
-        if (!field.includes('.')) return field;
-        const [lcode, fname] = field.split('.', 2);
-        if (!parentMap[lcode]) return field;
-        const segments = [fname];
-        let curr = lcode;
-        while (curr && curr !== '-') {
-          const info = parentMap[curr];
-          if (!info) break;
-          segments.unshift(info.seg);
-          curr = info.parent;
-        }
-        return segments.join('.');
-      }
-
-      const resolvedTypes = typesList.map(resolvePath);
-      const parsedRows = [];
-
-      for (const rline of rowsList) {
-        const rawVals = rline.split('|');
-        const expandedVals = [];
-        for (const rv of rawVals) {
-          if (/^#\d+$/.test(rv)) {
-            const count = parseInt(rv.slice(1), 10);
-            for (let c = 0; c < count; c++) expandedVals.push(null);
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('@')) {
+          if (line.includes(':') && !line.startsWith('@rows')) {
+            const colonIdx = line.indexOf(':');
+            const sname = line.slice(1, colonIdx);
+            const inline = line.slice(colonIdx + 1);
+            sections[sname] = inline ? [inline] : [];
+            currentSection = null;
           } else {
-            expandedVals.push(decodeScalar(rv));
+            const sname = line.slice(1).trim();
+            sections[sname] = [];
+            currentSection = sname;
           }
+        } else if (currentSection !== null) {
+          sections[currentSection].push(line);
         }
-        parsedRows.push(expandedVals);
       }
 
-      tables[tableName] = {
-        types: resolvedTypes,
-        rawTypes: typesList,
-        rows: parsedRows,
-        arrays: arraysLines,
+      // Parse @tree
+      const levelName = {};
+      const levelParentCode = {};
+      for (const rawLine of sections.tree || []) {
+        const entries = rawLine.includes(',') ? rawLine.split(',') : [rawLine];
+        for (let entry of entries) {
+          entry = entry.trim();
+          if (!entry) continue;
+          const [code, rest] = entry.split('=', 2);
+          const [name, pcode] = rest.split('^', 2);
+          levelName[code.trim()] = name.trim();
+          levelParentCode[code.trim()] = (!pcode || pcode.trim() === '-') ? null : pcode.trim();
+        }
+      }
+
+      function fullPath(lvlCode, leaf) {
+        if (levelName[lvlCode]) {
+          const chain = [];
+          let code = lvlCode;
+          while (code) {
+            chain.push(escapeKey(levelName[code]));
+            code = levelParentCode[code];
+          }
+          return chain.reverse().join('.') + '.' + leaf;
+        }
+        return `${lvlCode}.${leaf}`;
+      }
+
+      function levelOnlyPath(lvlCode) {
+        const chain = [];
+        let code = lvlCode;
+        while (code) {
+          chain.push(escapeKey(levelName[code]));
+          code = levelParentCode[code];
+        }
+        return chain.reverse().join('.');
+      }
+
+      const levelFullPaths = {};
+      for (const code of Object.keys(levelName)) {
+        levelFullPaths[code] = levelOnlyPath(code);
+      }
+
+      // Parse @types
+      const fieldOrder = [];
+      for (const rawLine of sections.types || []) {
+        if (!rawLine) continue;
+        let items = [];
+        if (rawLine.includes(',')) items = rawLine.split(',');
+        else if (rawLine.includes(FIELD_SEP)) items = awareSplit(rawLine, FIELD_SEP);
+        else items = [rawLine];
+
+        for (let item of items) {
+          item = item.trim();
+          if (!item) continue;
+          const parts = item.split(/(?<!\\)\./);
+          if (parts.length > 1) {
+            const lvl = parts.slice(0, -1).join('.');
+            const leaf = parts[parts.length - 1];
+            fieldOrder.push(fullPath(lvl, leaf));
+          } else {
+            fieldOrder.push(item);
+          }
+        }
+      }
+
+      // Parse @arrays
+      const arrayPath = {};
+      const arrayOrder = [];
+      for (const rawLine of sections.arrays || []) {
+        if (!rawLine) continue;
+        const entries = rawLine.includes(',') ? rawLine.split(',') : [rawLine];
+        for (let entry of entries) {
+          entry = entry.trim();
+          if (!entry) continue;
+          const [acode, rest] = entry.split('=', 2);
+          const parts = rest.split(/(?<!\\)\./);
+          if (parts.length > 1) {
+            const lvl = parts.slice(0, -1).join('.');
+            const leaf = parts[parts.length - 1];
+            arrayPath[acode] = fullPath(lvl, leaf);
+          } else {
+            arrayPath[acode] = rest;
+          }
+          arrayOrder.push(acode);
+        }
+      }
+
+      // Parse @dict
+      const dictMap = {};
+      for (const rawLine of sections.dict || []) {
+        if (!rawLine) continue;
+        const entries = rawLine.includes(',') ? rawLine.split(',') : [rawLine];
+        for (let entry of entries) {
+          entry = entry.trim();
+          if (!entry) continue;
+          const eqIdx = entry.indexOf('=');
+          if (eqIdx !== -1) {
+            dictMap[entry.slice(0, eqIdx).trim()] = entry.slice(eqIdx + 1);
+          }
+        }
+      }
+
+      // Parse @rows
+      const rows = [];
+      for (const line of sections.rows || []) {
+        const rawVals = line ? awareSplit(line, FIELD_SEP) : [];
+        const vals = [];
+        for (let v of rawVals) {
+          if (dictMap[v]) v = dictMap[v];
+          if (v.startsWith(ABSENT_TOKEN) && v.length > 1 && /^\d+$/.test(v.slice(1))) {
+            const cnt = parseInt(v.slice(1), 10);
+            for (let c = 0; c < cnt; c++) vals.push(ABSENT_TOKEN);
+          } else if (v === OLD_NULL_TOKEN) {
+            vals.push(NULL_TOKEN);
+          } else if (v.startsWith(OLD_NULL_TOKEN) && v.length > 1 && /^\d+$/.test(v.slice(1))) {
+            const cnt = parseInt(v.slice(1), 10);
+            for (let c = 0; c < cnt; c++) vals.push(NULL_TOKEN);
+          } else {
+            vals.push(v);
+          }
+        }
+
+        const row = {};
+        for (let idx = 0; idx < fieldOrder.length; idx++) {
+          const path = fieldOrder[idx];
+          if (idx < vals.length) {
+            const val = vals[idx];
+            row[path] = val === ABSENT_TOKEN ? ABSENT : decodeScalar(val);
+          } else {
+            row[path] = ABSENT;
+          }
+        }
+        rows.push(row);
+      }
+
+      tables[tableCode] = {
+        fieldOrder,
+        arrayOrder,
+        arrayPath,
+        rows,
+        levelFullPaths,
       };
     }
 
-    function reconstructTable(tableName) {
-      const tbl = tables[tableName];
-      if (!tbl) return [];
-
-      const records = [];
-      for (let r = 0; r < tbl.rows.length; r++) {
-        const row = tbl.rows[r];
-        const record = {};
-        for (let col = 0; col < tbl.types.length; col++) {
-          const path = tbl.types[col];
-          const val = col < row.length ? row[col] : null;
-
-          if (path === '_parent' || path === '_idx') continue;
-          if (path.startsWith('$has:') || path.startsWith('$lvl:')) continue;
-
-          if (path.includes('.')) {
-            const parts = path.split('.');
-            let curr = record;
-            for (let p = 0; p < parts.length - 1; p++) {
-              if (!curr[parts[p]]) curr[parts[p]] = {};
-              curr = curr[parts[p]];
-            }
-            curr[parts[parts.length - 1]] = val;
-          } else {
-            record[path] = val;
-          }
-        }
-        records.push(record);
+    function setDotted(record, path, value) {
+      const parts = splitPath(path);
+      let curr = record;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (!curr[p] || typeof curr[p] !== 'object') curr[p] = {};
+        curr = curr[p];
       }
-
-      // Link child arrays
-      for (const arrLine of tbl.arrays) {
-        const [childCode, fieldPath] = arrLine.split('=').map((s) => s.trim());
-        const childTbl = tables[childCode];
-        if (!childTbl) continue;
-
-        const childRecords = reconstructTable(childCode);
-        const parentIdxCol = childTbl.types.indexOf('_parent');
-        const idxCol = childTbl.types.indexOf('_idx');
-
-        const groups = {};
-        for (let cr = 0; cr < childTbl.rows.length; cr++) {
-          const crow = childTbl.rows[cr];
-          const pidx = crow[parentIdxCol];
-          const order = crow[idxCol] || 0;
-          if (!groups[pidx]) groups[pidx] = [];
-          groups[pidx].push({ order, data: childRecords[cr] });
-        }
-
-        for (let r = 0; r < records.length; r++) {
-          const items = groups[r] || [];
-          items.sort((a, b) => a.order - b.order);
-          const finalArray = items.map((it) => it.data);
-
-          if (fieldPath.includes('.')) {
-            const parts = fieldPath.split('.');
-            let curr = records[r];
-            for (let p = 0; p < parts.length - 1; p++) {
-              if (!curr[parts[p]]) curr[parts[p]] = {};
-              curr = curr[parts[p]];
-            }
-            curr[parts[parts.length - 1]] = finalArray;
-          } else {
-            records[r][fieldPath] = finalArray;
-          }
-        }
-      }
-
-      return records;
+      curr[parts[parts.length - 1]] = value;
     }
 
-    const result = reconstructTable('root');
-    if (isSingle) return result.length ? result[0] : {};
-    return result;
+    function buildRecord(tableCode, rowIndex) {
+      const tbl = tables[tableCode];
+      if (!tbl) return {};
+      const row = tbl.rows[rowIndex];
+      const record = {};
+
+      // Fill leaf fields
+      for (const path of Object.keys(row)) {
+        if (path === '_parent' || path === '_idx') continue;
+        if (path.startsWith('$has:') || path.startsWith('$lvl:')) continue;
+        const val = row[path];
+        if (val !== ABSENT) {
+          setDotted(record, path, val);
+        }
+      }
+
+      // Empty dict branches ($lvl:)
+      for (const path of Object.keys(row)) {
+        if (!path.startsWith('$lvl:') || row[path] !== true) continue;
+        const code = path.slice('$lvl:'.length);
+        const branchPath = tbl.levelFullPaths[code];
+        if (!branchPath) continue;
+        const parts = splitPath(branchPath);
+        let curr = record;
+        let exists = true;
+        for (const p of parts) {
+          if (!curr || typeof curr !== 'object' || !(p in curr)) {
+            exists = false;
+            break;
+          }
+          curr = curr[p];
+        }
+        if (!exists) {
+          setDotted(record, branchPath, {});
+        }
+      }
+
+      // Child arrays
+      for (const acode of tbl.arrayOrder) {
+        const hasFlag = row[`$has:${acode}`];
+        if (hasFlag === false) continue;
+
+        const childTableCode = acode;
+        const arrFieldPath = tbl.arrayPath[acode];
+        const childTbl = tables[childTableCode];
+        let recordItems = [];
+
+        if (childTbl) {
+          const matching = [];
+          for (let i = 0; i < childTbl.rows.length; i++) {
+            const crow = childTbl.rows[i];
+            if (crow._parent === rowIndex || crow._parent === String(rowIndex)) {
+              const idxVal = crow._idx !== undefined ? parseInt(crow._idx, 10) : 0;
+              matching.push({ idx: isNaN(idxVal) ? 0 : idxVal, rowIdx: i });
+            }
+          }
+          matching.sort((a, b) => a.idx - b.idx);
+          recordItems = matching.map((m) => buildRecord(childTableCode, m.rowIdx));
+        }
+
+        setDotted(record, arrFieldPath, recordItems);
+      }
+
+      return record;
+    }
+
+    const rootTable = tables.root;
+    if (!rootTable) return [];
+    const results = [];
+    for (let i = 0; i < rootTable.rows.length; i++) {
+      results.push(buildRecord('root', i));
+    }
+
+    if (shape === 'single') return results.length ? results[0] : {};
+    return results;
   }
 
   // --- Fast Encoder ---
   function encode(data) {
-    if (data === null || data === undefined) return 'table:root\n@types\nvalue\n@rows\n#';
+    if (data === null || data === undefined) return '';
     const isSingle = !Array.isArray(data);
     const records = isSingle ? [data] : data;
-
-    if (!records.length) {
-      return '@shape:list\ntable:root\n@types\n@rows';
-    }
+    if (!records.length) return '';
 
     // Collect schema
     const flatFields = [];
     const arrayFields = [];
-    const treeMap = {};
-    let levelCounter = 1;
 
     function analyze(obj, prefix = '') {
       if (!obj || typeof obj !== 'object') return;
       for (const k of Object.keys(obj)) {
-        const fullKey = prefix ? `${prefix}.${k}` : k;
+        const escaped = escapeKey(k);
+        const fullKey = prefix ? `${prefix}.${escaped}` : escaped;
         const val = obj[k];
 
         if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object') {
@@ -331,168 +480,48 @@
 
     for (const r of records) analyze(r);
 
-    // Build parent-pointer tree if deep nesting exists
-    const treeHeader = [];
-    const levelCodeMap = {}; // "address.present" -> "l2"
-
-    const prefixSet = new Set();
-    for (const f of flatFields) {
-      if (f.includes('.')) {
-        const parts = f.split('.');
-        let cur = '';
-        for (let i = 0; i < parts.length - 1; i++) {
-          cur = cur ? `${cur}.${parts[i]}` : parts[i];
-          prefixSet.add(cur);
-        }
+    function resolvePath(rec, path) {
+      const parts = splitPath(path);
+      let curr = rec;
+      for (const p of parts) {
+        if (!curr || typeof curr !== 'object' || !(p in curr)) return [false, null];
+        curr = curr[p];
       }
+      return [true, curr];
     }
 
-    const sortedPrefixes = Array.from(prefixSet).sort((a, b) => a.split('.').length - b.split('.').length);
-    if (sortedPrefixes.length >= 2) {
-      for (const p of sortedPrefixes) {
-        const parts = p.split('.');
-        const seg = parts[parts.length - 1];
-        const parentP = parts.slice(0, -1).join('.');
-        const pcode = parentP ? levelCodeMap[parentP] : '-';
-        const code = `l${levelCounter++}`;
-        levelCodeMap[p] = code;
-        treeHeader.push(`${code}=${seg}^${pcode}`);
-      }
-    }
-
-    // Field headers
-    const typesHeader = flatFields.map((f) => {
-      if (!f.includes('.')) return f;
-      const parts = f.split('.');
-      const parentP = parts.slice(0, -1).join('.');
-      const fname = parts[parts.length - 1];
-      if (levelCodeMap[parentP]) {
-        return `${levelCodeMap[parentP]}.${fname}`;
-      }
-      return f;
-    });
-
-    // Generate rows
     const rows = [];
     for (const r of records) {
-      const rowVals = flatFields.map((f) => {
-        let curr = r;
-        if (!f.includes('.')) return curr ? encodeScalar(curr[f]) : '#';
-        const parts = f.split('.');
-        for (const p of parts) {
-          if (!curr || typeof curr !== 'object') return '#';
-          curr = curr[p];
-        }
-        return encodeScalar(curr);
-      });
-
-      // Compress consecutive nulls (#N)
-      const compressed = [];
-      let nullRun = 0;
-      for (const v of rowVals) {
-        if (v === '#') {
-          nullRun++;
+      const vals = [];
+      for (const f of flatFields) {
+        const [found, val] = resolvePath(r, f);
+        if (!found) {
+          vals.push(ABSENT_TOKEN);
         } else {
-          if (nullRun > 1) {
-            compressed.push(`#${nullRun}`);
-          } else if (nullRun === 1) {
-            compressed.push('#');
-          }
-          nullRun = 0;
-          compressed.push(v);
+          vals.push(encodeScalar(val));
         }
       }
-      if (nullRun > 1) {
-        compressed.push(`#${nullRun}`);
-      } else if (nullRun === 1) {
-        compressed.push('#');
+      while (vals.length && vals[vals.length - 1] === ABSENT_TOKEN) {
+        vals.pop();
       }
-      rows.push(compressed.join('|'));
+      rows.push(vals.join(FIELD_SEP));
     }
 
-    const out = [];
-    if (isSingle) out.push('@shape:single');
-    else out.push('@shape:list');
-
-    out.push('table:root');
-    if (treeHeader.length > 0) {
-      out.push('@tree');
-      out.push(...treeHeader);
+    const shape = isSingle ? '~S' : '~L';
+    const lines = [shape, 'T:root'];
+    if (flatFields.length) {
+      lines.push(`@types:${flatFields.join(',')}`);
     }
-    out.push('@types');
-    out.push(...typesHeader);
+    lines.push('@rows');
+    lines.push(...rows);
 
-    // If arrays of objects exist, create child tables
-    const childTables = [];
-    if (arrayFields.length > 0) {
-      out.push('@arrays');
-      let cIdx = 1;
-      for (const arrField of arrayFields) {
-        const ccode = `c${cIdx++}`;
-        out.push(`${ccode}=${arrField}`);
-
-        const childRows = [];
-        let childFlatKeys = [];
-        for (let rIdx = 0; rIdx < records.length; rIdx++) {
-          let curr = records[rIdx];
-          const parts = arrField.split('.');
-          for (const p of parts) {
-            if (!curr) break;
-            curr = curr[p];
-          }
-          if (Array.isArray(curr)) {
-            for (let iIdx = 0; iIdx < curr.length; iIdx++) {
-              const item = curr[iIdx];
-              if (item && typeof item === 'object') {
-                for (const k of Object.keys(item)) {
-                  if (!childFlatKeys.includes(k) && typeof item[k] !== 'object') {
-                    childFlatKeys.push(k);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        const cTableLines = [`table:${ccode}`, '@types', '_parent', '_idx', ...childFlatKeys, '@rows'];
-
-        for (let rIdx = 0; rIdx < records.length; rIdx++) {
-          let curr = records[rIdx];
-          const parts = arrField.split('.');
-          for (const p of parts) {
-            if (!curr) break;
-            curr = curr[p];
-          }
-          if (Array.isArray(curr)) {
-            for (let iIdx = 0; iIdx < curr.length; iIdx++) {
-              const item = curr[iIdx];
-              const vals = [String(rIdx), String(iIdx)];
-              for (const k of childFlatKeys) {
-                vals.push(item && item[k] !== undefined ? encodeScalar(item[k]) : '#');
-              }
-              cTableLines.push(vals.join('|'));
-            }
-          }
-        }
-        childTables.push(cTableLines.join('\n'));
-      }
-    }
-
-    out.push('@rows');
-    out.push(...rows);
-
-    let finalStr = out.join('\n');
-    if (childTables.length > 0) {
-      finalStr += '\n===\n' + childTables.join('\n===\n');
-    }
-    return finalStr;
+    return lines.join('\n');
   }
 
   // --- Subword Token Estimator (calibrated for GPT-4o o200k & Claude) ---
   function estimateTokens(text) {
     if (!text) return 0;
     let tokens = 0;
-    // Regex matches words, numbers, CJK glyphs, and punctuation blocks
     const regex = /[\u4e00-\u9fa5]|[\u3040-\u30ff]|\w+|[^\w\s]|\s+/g;
     let match;
     while ((match = regex.exec(text)) !== null) {

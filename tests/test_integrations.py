@@ -19,7 +19,7 @@ def test_format_docs_as_twig_from_dicts():
         {"title": "Doc 2", "content": "Deep research", "score": 0.88},
     ]
     encoded = format_docs_as_twig(docs)
-    assert "table:root" in encoded
+    assert "T:root" in encoded
     decoded = decode(encoded)
     assert decoded == docs
 
@@ -30,7 +30,7 @@ def test_format_docs_as_twig_from_mock_documents():
         MockDocument(page_content="Context passage 2", metadata={"source": "news", "id": 102}),
     ]
     encoded = format_docs_as_twig(docs)
-    assert "table:root" in encoded
+    assert "T:root" in encoded
     decoded = decode(encoded)
     assert len(decoded) == 2
     assert decoded[0]["content"] == "Context passage 1"
@@ -45,11 +45,11 @@ def test_twig_document_compressor():
     ]
     compressed = compressor(docs)
     assert "The following data is serialized in Twig format" in compressed
-    assert "table:root" in compressed
+    assert "T:root" in compressed
 
 
 def test_to_prompt_context():
     data = {"status": "active", "code": 200}
     res = to_prompt_context(data, include_instructions=True)
     assert "serialized in Twig format" in res
-    assert "@shape:single" in res
+    assert "~S" in res
