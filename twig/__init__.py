@@ -11,6 +11,13 @@ See README.md for full documentation, benchmarks, and known limitations.
 """
 
 from .codec import encode, decode
+from .integrations import format_docs_as_twig, TwigDocumentCompressor, to_prompt_context
 
 __version__ = "0.1.0"
-__all__ = ["encode", "decode"]
+__all__ = [
+    "encode",
+    "decode",
+    "format_docs_as_twig",
+    "TwigDocumentCompressor",
+    "to_prompt_context",
+]

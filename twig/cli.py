@@ -40,6 +40,20 @@ def _write_output(text: str, path: str | None) -> None:
             f.write(text)
 
 
+def count_tokens(text: str, encoding_name: str = "o200k_base") -> tuple[int, bool]:
+    """Returns (token_count, is_exact). Uses tiktoken if available, else heuristic."""
+    try:
+        import tiktoken
+        try:
+            enc = tiktoken.get_encoding(encoding_name)
+        except Exception:
+            enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text, disallowed_special=())), True
+    except Exception:
+        # Fallback heuristic: ~3.8 chars/token for structured text
+        return max(1, int(len(text) / 3.8)), False
+
+
 def cmd_encode(args: argparse.Namespace) -> int:
     try:
         raw = _read_input(args.input)
@@ -64,12 +78,23 @@ def cmd_encode(args: argparse.Namespace) -> int:
 
     _write_output(result, args.output)
 
-    if args.stats and args.output:
+    if (args.stats or getattr(args, "tokens", False)) and args.output:
         json_chars = len(raw)
         twig_chars = len(result)
         reduction = (1 - twig_chars / json_chars) * 100 if json_chars else 0
         direction = "smaller" if reduction >= 0 else "larger"
-        print(f"twig encode: {json_chars} -> {twig_chars} chars ({abs(reduction):.1f}% {direction})", file=sys.stderr)
+        stat_line = f"twig encode: {json_chars} -> {twig_chars} chars ({abs(reduction):.1f}% {direction})"
+
+        if getattr(args, "tokens", False):
+            encoding = getattr(args, "encoding", "o200k_base")
+            j_tok, is_exact = count_tokens(raw, encoding)
+            t_tok, _ = count_tokens(result, encoding)
+            tok_red = (1 - t_tok / j_tok) * 100 if j_tok else 0
+            tok_dir = "smaller" if tok_red >= 0 else "larger"
+            exact_lbl = encoding if is_exact else f"est. {encoding}"
+            stat_line += f" | {j_tok} -> {t_tok} tokens ({abs(tok_red):.1f}% {tok_dir}, {exact_lbl})"
+
+        print(stat_line, file=sys.stderr)
 
     return 0
 
@@ -97,6 +122,91 @@ def cmd_decode(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    try:
+        raw = _read_input(args.input)
+    except FileNotFoundError:
+        print(f"twig benchmark: no such file: {args.input}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"twig benchmark: could not read {args.input}: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"twig benchmark: {args.input} is not valid JSON: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        twig_text = twig_encode(data)
+    except Exception as e:
+        print(f"twig benchmark: failed to encode to Twig: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+    pretty_json = json.dumps(data, indent=2, ensure_ascii=False)
+    min_json = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+    try:
+        import yaml
+        yaml_text = yaml.dump(data, allow_unicode=True, sort_keys=False)
+    except Exception:
+        yaml_text = None
+
+    encoding_name = getattr(args, "encoding", "o200k_base")
+    formats = [
+        ("JSON (pretty)", pretty_json),
+        ("JSON (minified)", min_json),
+    ]
+    if yaml_text is not None:
+        formats.append(("YAML", yaml_text))
+    formats.append(("Twig", twig_text))
+
+    rows = []
+    min_tok = None
+    pretty_tok = None
+    is_exact = True
+
+    for name, text in formats:
+        chars = len(text)
+        tokens, exact = count_tokens(text, encoding_name)
+        is_exact = exact
+        if name == "JSON (minified)":
+            min_tok = tokens
+        elif name == "JSON (pretty)":
+            pretty_tok = tokens
+        rows.append((name, chars, tokens))
+
+    title = f"Twig Token Benchmark: {args.input}"
+    enc_info = f"Tokenizer: {encoding_name}" if is_exact else f"Tokenizer: {encoding_name} (heuristic fallback)"
+    print(f"\n{title}")
+    print(enc_info)
+    print("=" * 74)
+    header = f"{'Format':<18} {'Chars':>10} {'Tokens':>10} {'vs. Min JSON':>15} {'vs. Pretty':>15}"
+    print(header)
+    print("-" * 74)
+
+    for name, chars, tokens in rows:
+        vs_min = f"{(tokens - min_tok) / min_tok * 100:+.1f}%" if min_tok else "baseline"
+        if name == "JSON (minified)":
+            vs_min = "baseline"
+        vs_pretty = f"{(tokens - pretty_tok) / pretty_tok * 100:+.1f}%" if pretty_tok else "baseline"
+        if name == "JSON (pretty)":
+            vs_pretty = "baseline"
+        row_str = f"{name:<18} {chars:>10,d} {tokens:>10,d} {vs_min:>15} {vs_pretty:>15}"
+        if name == "Twig":
+            print("-" * 74)
+            print(f">> {row_str}")
+        else:
+            print(f"   {row_str}")
+
+    print("=" * 74)
+    if min_tok and rows[-1][2] < min_tok:
+        saved_tok = min_tok - rows[-1][2]
+        pct = (saved_tok / min_tok) * 100
+        print(f"Twig saves {saved_tok:,d} tokens ({pct:.1f}%) compared to minified JSON.\n")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="twig",
@@ -109,8 +219,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_encode.add_argument("-o", "--output", help="write to this file instead of stdout")
     p_encode.add_argument(
         "--stats", action="store_true",
-        help="print char-count reduction to stderr (only meaningful with -o, "
-             "since stdout is reserved for the encoded text itself)",
+        help="print char-count reduction to stderr (meaningful with -o)",
+    )
+    p_encode.add_argument(
+        "--tokens", action="store_true",
+        help="print token-count reduction to stderr using tiktoken (meaningful with -o)",
+    )
+    p_encode.add_argument(
+        "--encoding", default="o200k_base",
+        help="tiktoken encoding to use with --tokens (default: o200k_base)",
     )
     p_encode.set_defaults(func=cmd_encode)
 
@@ -122,6 +239,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="write minified JSON instead of pretty-printed (indent=2)",
     )
     p_decode.set_defaults(func=cmd_decode)
+
+    p_bench = subparsers.add_parser("benchmark", help="Benchmark JSON vs Minified vs YAML vs Twig")
+    p_bench.add_argument("input", help="path to a JSON file, or '-' for stdin")
+    p_bench.add_argument(
+        "--encoding", default="o200k_base",
+        help="tiktoken encoding to use (default: o200k_base)",
+    )
+    p_bench.set_defaults(func=cmd_benchmark)
 
     return parser
 

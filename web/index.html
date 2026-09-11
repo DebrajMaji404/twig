@@ -15,6 +15,7 @@
     if (theme === "light") document.documentElement.setAttribute("data-theme", "light");
   })();
 </script>
+<script src="twig.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -276,6 +277,85 @@
   }
   .error-line.show { display: block; }
 
+  /* Presets bar */
+  .preset-bar { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .preset-label { font-size: 0.72rem; color: var(--paper-dim); font-family: var(--mono); }
+  .preset-chip {
+    background: var(--bark-3);
+    border: 1px solid var(--line);
+    color: var(--paper);
+    padding: 0.22rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: all 0.15s ease;
+  }
+  .preset-chip:hover { border-color: var(--sage); color: var(--sage); background: var(--bark); }
+  .preset-chip.active { border-color: var(--sage-solid); background: rgba(147,172,120,0.15); color: var(--sage); font-weight: 600; }
+
+  /* Syntax Inspector */
+  .syntax-inspector { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.45rem; flex-wrap: wrap; }
+  .inspector-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    background: var(--bark-3);
+    border: 1px solid var(--line-soft);
+    color: var(--paper-dim);
+  }
+  .inspector-pill.active { border-color: var(--sage-dim); color: var(--sage); }
+
+  /* Token & Cost Calculator card */
+  .token-calc-card {
+    background: var(--bark-3);
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    padding: 0.75rem 0.9rem;
+    margin-top: 0.85rem;
+    font-size: 0.78rem;
+  }
+  .token-calc-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--mono);
+    color: var(--paper-dim);
+    margin-bottom: 0.45rem;
+  }
+  .token-calc-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 0.6rem;
+  }
+  .calc-metric {
+    background: var(--bark-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 0.4rem 0.55rem;
+  }
+  .calc-metric-lbl { font-size: 0.68rem; color: var(--paper-dim); font-family: var(--mono); }
+  .calc-metric-val { font-size: 0.95rem; font-weight: 700; font-family: var(--mono); color: var(--paper); }
+  .calc-metric-val.highlight { color: var(--sage); }
+
+  /* Integration Snippet styling */
+  .integrate-nav { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .integrate-tab-btn {
+    background: var(--bark-3);
+    border: 1px solid var(--line);
+    color: var(--paper-dim);
+    padding: 0.35rem 0.7rem;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .integrate-tab-btn.active { color: var(--sage); border-color: var(--sage); background: var(--bark-2); font-weight: 600; }
+
   section { padding: 3.2rem 0; border-top: 1px solid var(--line-soft); }
   h2.section-title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 0.6rem; }
   p.section-lede { color: var(--paper-dim); max-width: 62ch; margin: 0 0 2rem; font-size: 1rem; }
@@ -401,9 +481,19 @@
       <div class="converter-tabs">
         <button id="tab-convert" class="active">Convert</button>
         <button id="tab-ai-prompt">For AI</button>
+        <button id="tab-integrate">Integrate</button>
       </div>
 
       <div class="converter-body view-panel active" id="panel-convert">
+        <div class="preset-bar">
+          <span class="preset-label">Presets:</span>
+          <button class="preset-chip active" data-preset="ecommerce">🛒 Orders & Items</button>
+          <button class="preset-chip" data-preset="deeptree">🌳 Deep Tree (10x)</button>
+          <button class="preset-chip" data-preset="sparse">🧩 Sparse & Nulls</button>
+          <button class="preset-chip" data-preset="mandarin">🌐 Mandarin CJK</button>
+          <button class="preset-chip" data-preset="rag">🔍 RAG Chunks</button>
+        </div>
+
         <div class="direction-labels">
           <span id="left-label">JSON</span>
           <span id="right-label">Twig</span>
@@ -424,6 +514,13 @@
           </button>
         </div>
 
+        <div class="syntax-inspector" id="syntax-inspector" style="display:none;">
+          <span class="inspector-pill" id="pill-tree">Tree: 0 levels</span>
+          <span class="inspector-pill" id="pill-types">Cols: 0</span>
+          <span class="inspector-pill" id="pill-arrays">Arrays: 0</span>
+          <span class="inspector-pill" id="pill-nulls">RLE Nulls: Off</span>
+        </div>
+
         <div class="field-label">
           <span></span>
           <span id="right-count">0 chars</span>
@@ -437,6 +534,31 @@
           <div class="result-line" id="stats"></div>
         </div>
         <div class="error-line" id="error-banner"></div>
+
+        <div class="token-calc-card" id="token-calc-card" style="display:none;">
+          <div class="token-calc-title">
+            <span>Live Token & Cost Economics</span>
+            <span class="cost-badge" id="calc-pct-badge">-0% tokens</span>
+          </div>
+          <div class="token-calc-metrics">
+            <div class="calc-metric">
+              <div class="calc-metric-lbl">JSON Tokens</div>
+              <div class="calc-metric-val" id="metric-json-tok">0</div>
+            </div>
+            <div class="calc-metric">
+              <div class="calc-metric-lbl">Twig Tokens</div>
+              <div class="calc-metric-val highlight" id="metric-twig-tok">0</div>
+            </div>
+            <div class="calc-metric">
+              <div class="calc-metric-lbl">Saved / Query</div>
+              <div class="calc-metric-val highlight" id="metric-saved-tok">0</div>
+            </div>
+            <div class="calc-metric">
+              <div class="calc-metric-lbl">100k API Calls</div>
+              <div class="calc-metric-val highlight" id="metric-cost-saved">$0.00 saved</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="converter-body view-panel" id="panel-ai-prompt">
@@ -447,6 +569,23 @@
         <div class="ai-prompt-box" id="ai-prompt-text"></div>
         <div class="converter-actions">
           <button class="btn-sm primary" id="copy-prompt-btn">Copy prompt</button>
+        </div>
+      </div>
+
+      <div class="converter-body view-panel" id="panel-integrate">
+        <div class="field-label">
+          <span>Ready-to-use integration snippets for your AI pipeline</span>
+          <span></span>
+        </div>
+        <div class="integrate-nav">
+          <button class="integrate-tab-btn active" data-lang="python">Python (OpenAI)</button>
+          <button class="integrate-tab-btn" data-lang="langchain">LangChain RAG</button>
+          <button class="integrate-tab-btn" data-lang="typescript">Vercel AI SDK</button>
+          <button class="integrate-tab-btn" data-lang="curl">cURL API</button>
+        </div>
+        <div class="ai-prompt-box" id="integrate-code-box"></div>
+        <div class="converter-actions">
+          <button class="btn-sm primary" id="copy-integrate-btn">Copy snippet</button>
         </div>
       </div>
     </div>
@@ -588,6 +727,7 @@ data = decode(text)</div>
 <script>
   let mode = "encode";
   let currentView = "convert";
+  let activeLang = "python";
 
   const leftInput = document.getElementById("left-input");
   const rightOutput = document.getElementById("right-output");
@@ -604,12 +744,31 @@ data = decode(text)</div>
   const themeToggle = document.getElementById("theme-toggle");
   const iconSun = document.getElementById("icon-sun");
   const iconMoon = document.getElementById("icon-moon");
+
   const tabConvert = document.getElementById("tab-convert");
   const tabAiPrompt = document.getElementById("tab-ai-prompt");
+  const tabIntegrate = document.getElementById("tab-integrate");
   const panelConvert = document.getElementById("panel-convert");
   const panelAiPrompt = document.getElementById("panel-ai-prompt");
+  const panelIntegrate = document.getElementById("panel-integrate");
+
   const aiPromptText = document.getElementById("ai-prompt-text");
   const copyPromptBtn = document.getElementById("copy-prompt-btn");
+  const integrateCodeBox = document.getElementById("integrate-code-box");
+  const copyIntegrateBtn = document.getElementById("copy-integrate-btn");
+
+  const tokenCalcCard = document.getElementById("token-calc-card");
+  const calcPctBadge = document.getElementById("calc-pct-badge");
+  const metricJsonTok = document.getElementById("metric-json-tok");
+  const metricTwigTok = document.getElementById("metric-twig-tok");
+  const metricSavedTok = document.getElementById("metric-saved-tok");
+  const metricCostSaved = document.getElementById("metric-cost-saved");
+
+  const syntaxInspector = document.getElementById("syntax-inspector");
+  const pillTree = document.getElementById("pill-tree");
+  const pillTypes = document.getElementById("pill-types");
+  const pillArrays = document.getElementById("pill-arrays");
+  const pillNulls = document.getElementById("pill-nulls");
 
   // --- theme toggle (light/dark), persisted across visits ------------
   function applyThemeIcons() {
@@ -617,7 +776,7 @@ data = decode(text)</div>
     iconSun.style.display = isLight ? "none" : "block";
     iconMoon.style.display = isLight ? "block" : "none";
   }
-  applyThemeIcons(); // sync icons with whatever the blocking head script already set
+  applyThemeIcons();
 
   themeToggle.addEventListener("click", () => {
     const isLight = document.documentElement.getAttribute("data-theme") === "light";
@@ -631,42 +790,207 @@ data = decode(text)</div>
     applyThemeIcons();
   });
 
-  const EXAMPLE = [
-    {
-      name: "ffs",
-      address: {
-        present: { state: "West Bengal", district: "Paschim Bardhaman", pin: "713201" },
-        permanent: { state: "West Bengal", district: "Paschim Bardhaman", pin: "713301" }
+  const PRESETS = {
+    ecommerce: [
+      {
+        orderId: "ORD-9401",
+        customer: { name: "Elena Rostova", tier: "Gold" },
+        shipping: { city: "Stockholm", country: "Sweden" },
+        items: [
+          { sku: "KB-90", product: "Mechanical Keyboard", qty: 1, price: 149 },
+          { sku: "MS-04", product: "Wireless Mouse", qty: 2, price: 59 }
+        ]
       },
-      experience: [
-        { companyName: "Tata Steel", role: "Engineer", years: 2 },
-        { companyName: "Infosys", role: "Developer", years: 3 }
-      ]
-    },
-    {
-      name: "raj",
-      address: {
-        present: { state: "Bihar", district: "Patna", pin: "800001" },
-        permanent: { state: "Bihar", district: "Gaya", pin: "823001" }
+      {
+        orderId: "ORD-9402",
+        customer: { name: "Marcus Vance", tier: "Silver" },
+        shipping: { city: "Oslo", country: "Norway" },
+        items: [
+          { sku: "HD-50", product: "Studio Headphones", qty: 1, price: 220 }
+        ]
+      }
+    ],
+    deeptree: [
+      {
+        org: {
+          region: {
+            division: {
+              department: {
+                team: {
+                  pod: {
+                    lead: {
+                      contact: { email: "dev@company.org", room: 402 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        budget: 250000
       },
-      experience: [
-        { companyName: "Wipro", role: "Analyst", years: 1 }
-      ]
-    }
-  ];
+      {
+        org: {
+          region: {
+            division: {
+              department: {
+                team: {
+                  pod: {
+                    lead: {
+                      contact: { email: "ops@company.org", room: 405 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        budget: 180000
+      }
+    ],
+    sparse: [
+      {
+        id: 101,
+        name: "Sarah Chen",
+        secondaryPhone: null,
+        emergencyContact: null,
+        notes: null,
+        skills: ["python", "rust"]
+      },
+      {
+        id: 102,
+        name: "Dev Patel",
+        secondaryPhone: null,
+        emergencyContact: null,
+        notes: null,
+        skills: ["typescript"]
+      }
+    ],
+    mandarin: [
+      {
+        姓名: "张伟",
+        职位: "高级研究员",
+        地址: { 省份: "北京市", 城市: "海淀区", 详细: "中关村南大街1号" },
+        项目: ["大语言模型压缩", "知识图谱检索"]
+      },
+      {
+        姓名: "李娜",
+        职位: "架构师",
+        地址: { 省份: "上海市", 城市: "浦东新区", 详细: "张江高科技园区" },
+        项目: ["分布式推理引擎"]
+      }
+    ],
+    rag: [
+      {
+        id: "doc_01",
+        score: 0.94,
+        title: "Subword Tokenization Principles",
+        content: "BPE merges frequent byte pairs, causing quadratic token explosion on repeated dot paths.",
+        metadata: { source: "arxiv:2401.0001", author: "J. Doe" }
+      },
+      {
+        id: "doc_02",
+        score: 0.89,
+        title: "Relational Table Normalization",
+        content: "Extracting nested array entities into normalized child tables avoids delimiter collisions.",
+        metadata: { source: "arxiv:2401.0002", author: "E. Smith" }
+      }
+    ]
+  };
 
-  // --- view tabs: Convert vs For AI -----------------------------------
+  const INTEGRATION_SNIPPETS = {
+    python: `import openai
+import twig
+
+client = openai.OpenAI()
+
+# 1. Structured data to inject
+data = [
+    {"user": "Alice", "role": "Engineer", "skills": ["python", "rust"]},
+    {"user": "Bob", "role": "Architect", "skills": ["aws", "k8s"]}
+]
+
+# 2. Encode to compact Twig (cuts prompt tokens 50-70%)
+twig_payload = twig.encode(data)
+
+# 3. Inject cheaply into LLM prompt
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "Analyze the structured records provided in Twig format."},
+        {"role": "user", "content": twig_payload}
+    ]
+)
+print(response.choices[0].message.content)`,
+
+    langchain: `from twig.integrations.langchain import TwigDocumentCompressor
+
+# Drop-in context compressor for LangChain LCEL RAG pipelines:
+compressor = TwigDocumentCompressor()
+
+# Integrate with LCEL chain:
+# rag_chain = retriever | compressor | prompt_template | llm
+
+# Or format retrieved documents directly:
+from twig.integrations import format_docs_as_twig
+compact_context = format_docs_as_twig(retrieved_docs)`,
+
+    typescript: `import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+// If using Twig in Node / Browser (web/twig.js):
+const twigText = Twig.encode(databaseRecords);
+
+const { text } = await generateText({
+  model: openai("gpt-4o"),
+  system: "Records are formatted in token-efficient Twig format.",
+  prompt: twigText,
+});
+console.log(text);`,
+
+    curl: `# 1. Encode JSON to Twig via API:
+curl -X POST https://your-deployment.vercel.app/api/encode \\
+  -H "Content-Type: application/json" \\
+  -d '{"json": [{"name": "Alice", "role": "Engineer"}]}'
+
+# 2. Decode Twig back to JSON:
+curl -X POST https://your-deployment.vercel.app/api/decode \\
+  -H "Content-Type: application/json" \\
+  -d '{"twig": "table:root\\n@types\\nname\\n@rows\\nAlice"}'`
+  };
+
+  // --- view tabs: Convert vs For AI vs Integrate ---------------------
   function setView(view) {
     currentView = view;
     tabConvert.classList.toggle("active", view === "convert");
     tabAiPrompt.classList.toggle("active", view === "ai-prompt");
+    tabIntegrate.classList.toggle("active", view === "integrate");
     panelConvert.classList.toggle("active", view === "convert");
     panelAiPrompt.classList.toggle("active", view === "ai-prompt");
+    panelIntegrate.classList.toggle("active", view === "integrate");
   }
   tabConvert.addEventListener("click", () => setView("convert"));
   tabAiPrompt.addEventListener("click", () => setView("ai-prompt"));
+  tabIntegrate.addEventListener("click", () => setView("integrate"));
 
-  // --- direction (JSON<->Twig): a swap button, not tabs ---------------
+  // Integrate tab language switching
+  document.querySelectorAll(".integrate-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".integrate-tab-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      activeLang = btn.dataset.lang;
+      integrateCodeBox.textContent = INTEGRATION_SNIPPETS[activeLang] || "";
+    });
+  });
+  integrateCodeBox.textContent = INTEGRATION_SNIPPETS[activeLang];
+
+  copyIntegrateBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(integrateCodeBox.textContent);
+    copyIntegrateBtn.textContent = "Copied";
+    setTimeout(() => (copyIntegrateBtn.textContent = "Copy snippet"), 1200);
+  });
+
+  // --- direction (JSON<->Twig): a swap button -------------------------
   function setDirection(newMode, { clearOutput = true } = {}) {
     mode = newMode;
     leftLabel.textContent = mode === "encode" ? "JSON" : "Twig";
@@ -676,6 +1000,8 @@ data = decode(text)</div>
       : "table:root\n@types\nname\n@rows\nffs";
     if (clearOutput) rightOutput.value = "";
     statsEl.innerHTML = "";
+    tokenCalcCard.style.display = "none";
+    syntaxInspector.style.display = "none";
     hideError();
     updateCounts();
   }
@@ -685,8 +1011,6 @@ data = decode(text)</div>
     const newMode = mode === "encode" ? "decode" : "encode";
     const prevOutput = rightOutput.value;
     setDirection(newMode, { clearOutput: false });
-    // Google Translate-style swap: move the previous result into the
-    // input box so you can immediately convert it back the other way.
     if (prevOutput) {
       leftInput.value = prevOutput;
       rightOutput.value = "";
@@ -708,25 +1032,84 @@ data = decode(text)</div>
     errorBanner.classList.remove("show");
   }
 
-  exampleBtn.addEventListener("click", () => {
-    hideError();
-    if (mode === "encode") {
-      leftInput.value = JSON.stringify(EXAMPLE, null, 2);
-      updateCounts();
-    } else {
-      leftInput.value = "";
-      fetch("/api/encode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ json: EXAMPLE })
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          leftInput.value = data.twig || "";
-          updateCounts();
-        })
-        .catch(() => showError("Could not load example (API unreachable)."));
+  function updateInspector(twigText) {
+    if (!twigText || mode !== "encode") {
+      syntaxInspector.style.display = "none";
+      return;
     }
+    const lines = twigText.split(/\r?\n/);
+    const treeLines = lines.filter((l) => /^l\d+=/.test(l.trim()));
+    const arrayLines = lines.filter((l) => /^c\d+=/.test(l.trim()));
+    const hasNullRle = /#\d+/.test(twigText);
+
+    let typesCount = 0;
+    const typesIdx = lines.indexOf("@types");
+    if (typesIdx !== -1) {
+      for (let i = typesIdx + 1; i < lines.length; i++) {
+        if (lines[i].startsWith("@") || lines[i].startsWith("table:") || lines[i].trim() === "===") break;
+        if (lines[i].trim()) typesCount++;
+      }
+    }
+
+    pillTree.textContent = `Tree: ${treeLines.length} levels`;
+    pillTree.classList.toggle("active", treeLines.length > 0);
+
+    pillTypes.textContent = `Cols: ${typesCount}`;
+    pillTypes.classList.toggle("active", typesCount > 0);
+
+    pillArrays.textContent = `Arrays: ${arrayLines.length} tables`;
+    pillArrays.classList.toggle("active", arrayLines.length > 0);
+
+    pillNulls.textContent = hasNullRle ? "RLE Nulls: #N active" : "RLE Nulls: Off";
+    pillNulls.classList.toggle("active", hasNullRle);
+
+    syntaxInspector.style.display = "flex";
+  }
+
+  function updateEconomics(jsonChars, twigChars, jsonTok, twigTok) {
+    if (mode !== "encode" || jsonTok <= 0) {
+      tokenCalcCard.style.display = "none";
+      return;
+    }
+    const tokReduction = Math.round((1 - twigTok / jsonTok) * 100);
+    const savedPerCall = Math.max(0, jsonTok - twigTok);
+    // $2.50 per 1M input tokens on GPT-4o
+    const monthlyCostSaved = ((savedPerCall * 100000) / 1000000) * 2.50;
+
+    metricJsonTok.textContent = jsonTok.toLocaleString();
+    metricTwigTok.textContent = twigTok.toLocaleString();
+    metricSavedTok.textContent = `${savedPerCall.toLocaleString()} (${tokReduction}%)`;
+    metricCostSaved.textContent = `$${monthlyCostSaved.toFixed(2)} / mo`;
+    calcPctBadge.textContent = `${tokReduction >= 0 ? '-' + tokReduction : '+' + Math.abs(tokReduction)}% tokens`;
+
+    tokenCalcCard.style.display = "block";
+  }
+
+  function applyPreset(presetKey) {
+    hideError();
+    document.querySelectorAll(".preset-chip").forEach((c) => {
+      c.classList.toggle("active", c.dataset.preset === presetKey);
+    });
+
+    const dataset = PRESETS[presetKey] || PRESETS.ecommerce;
+    if (mode === "encode") {
+      leftInput.value = JSON.stringify(dataset, null, 2);
+      updateCounts();
+      executeConversion();
+    } else {
+      setDirection("encode");
+      leftInput.value = JSON.stringify(dataset, null, 2);
+      updateCounts();
+      executeConversion();
+    }
+  }
+
+  document.querySelectorAll(".preset-chip").forEach((chip) => {
+    chip.addEventListener("click", () => applyPreset(chip.dataset.preset));
+  });
+
+  exampleBtn.addEventListener("click", () => {
+    applyPreset("ecommerce");
   });
 
   copyBtn.addEventListener("click", () => {
@@ -736,7 +1119,7 @@ data = decode(text)</div>
     setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
   });
 
-  runBtn.addEventListener("click", async () => {
+  async function executeConversion() {
     hideError();
     statsEl.innerHTML = "";
     const raw = leftInput.value.trim();
@@ -753,27 +1136,77 @@ data = decode(text)</div>
         } catch (e) {
           throw new Error("Input is not valid JSON: " + e.message);
         }
-        const resp = await fetch("/api/encode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ json: parsed })
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || "Server error");
-        rightOutput.value = data.twig;
-        const pct = data.reduction_pct;
-        statsEl.innerHTML = pct >= 0
-          ? `${data.json_chars} → ${data.twig_chars} chars, <span class="good">${pct}% smaller</span>`
-          : `${data.json_chars} → ${data.twig_chars} chars, <span class="bad">${Math.abs(pct)}% larger</span>`;
+
+        // Instant client-side conversion via Twig.js if available
+        let clientEncoded = null;
+        let clientJsonTok = 0;
+        let clientTwigTok = 0;
+        if (typeof Twig !== "undefined" && Twig.encode) {
+          try {
+            clientEncoded = Twig.encode(parsed);
+            clientJsonTok = Twig.estimateTokens(JSON.stringify(parsed));
+            clientTwigTok = Twig.estimateTokens(clientEncoded);
+            rightOutput.value = clientEncoded;
+            updateCounts();
+            updateInspector(clientEncoded);
+            updateEconomics(raw.length, clientEncoded.length, clientJsonTok, clientTwigTok);
+            const redPct = Math.round((1 - clientEncoded.length / raw.length) * 100);
+            statsEl.innerHTML = `${raw.length} → ${clientEncoded.length} chars, <span class="good">${redPct}% smaller</span> (instant)`;
+          } catch (err) {
+            console.warn("Client encoder fallback to server:", err);
+          }
+        }
+
+        // Confirm / enrich with Python serverless function if online
+        try {
+          const resp = await fetch("/api/encode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ json: parsed })
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            rightOutput.value = data.twig;
+            const pct = data.reduction_pct;
+            statsEl.innerHTML = pct >= 0
+              ? `${data.json_chars} → ${data.twig_chars} chars, <span class="good">${pct}% smaller</span>`
+              : `${data.json_chars} → ${data.twig_chars} chars, <span class="bad">${Math.abs(pct)}% larger</span>`;
+
+            updateInspector(data.twig);
+            if (data.json_tokens && data.twig_tokens) {
+              updateEconomics(data.json_chars, data.twig_chars, data.json_tokens, data.twig_tokens);
+            }
+          }
+        } catch (netErr) {
+          // If server is offline or local file://, client execution already succeeded!
+          if (!clientEncoded) throw netErr;
+        }
       } else {
-        const resp = await fetch("/api/decode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ twig: raw })
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || "Server error");
-        rightOutput.value = JSON.stringify(data.json, null, 2);
+        // Decode
+        let clientDecoded = null;
+        if (typeof Twig !== "undefined" && Twig.decode) {
+          try {
+            clientDecoded = Twig.decode(raw);
+            rightOutput.value = JSON.stringify(clientDecoded, null, 2);
+            updateCounts();
+          } catch (err) {
+            console.warn("Client decoder fallback to server:", err);
+          }
+        }
+
+        try {
+          const resp = await fetch("/api/decode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ twig: raw })
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            rightOutput.value = JSON.stringify(data.json, null, 2);
+          }
+        } catch (netErr) {
+          if (!clientDecoded) throw netErr;
+        }
       }
       updateCounts();
     } catch (e) {
@@ -782,7 +1215,12 @@ data = decode(text)</div>
       runBtn.disabled = false;
       runBtn.textContent = "Convert";
     }
-  });
+  }
+
+  runBtn.addEventListener("click", executeConversion);
+
+  // Initialize with the default preset immediately on load!
+  applyPreset("ecommerce");
 
   // --- "For AI" tab: a spec any LLM can be given to read/write Twig ---
   const AI_PROMPT = `You will read and/or write data in "Twig", a compact text format for nested JSON. Follow these rules exactly.
