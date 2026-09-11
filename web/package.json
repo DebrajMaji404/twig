@@ -1,0 +1,26 @@
+{
+  "name": "twig-format",
+  "version": "0.1.0",
+  "description": "Token-efficient serialization format for nested JSON in LLM contexts",
+  "main": "twig.js",
+  "types": "twig.d.ts",
+  "scripts": {
+    "test": "node -e \"const Twig = require('./twig.js'); const t = Twig.encode([{a: 1}]); console.log('Twig JS test passed');\""
+  },
+  "keywords": [
+    "json",
+    "llm",
+    "token-compression",
+    "serialization",
+    "openai",
+    "rag",
+    "tabular",
+    "prompt-engineering"
+  ],
+  "author": "Debraj Maji <debrajmaji404@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DebrajMaji404/twig.git"
+  }
+}

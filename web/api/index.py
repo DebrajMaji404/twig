@@ -34,16 +34,21 @@ from twig_codec import encode, decode
 app = Flask(__name__)
 
 _INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "index.html")
+_TWIG_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "twig.js")
 
 
 @app.route("/")
 def serve_index():
-    # Flask handles every request here (confirmed: without this route,
-    # Flask itself returned "Not Found" for "/", proving requests DO
-    # reach this app correctly -- the missing piece was just this route,
-    # not a Vercel routing/rewrite problem).
     with open(_INDEX_HTML_PATH, "r", encoding="utf-8") as f:
         return Response(f.read(), mimetype="text/html")
+
+
+@app.route("/twig.js")
+def serve_twig_js():
+    if os.path.exists(_TWIG_JS_PATH):
+        with open(_TWIG_JS_PATH, "r", encoding="utf-8") as f:
+            return Response(f.read(), mimetype="application/javascript")
+    return Response("// not found", mimetype="application/javascript", status=404)
 
 
 @app.after_request
