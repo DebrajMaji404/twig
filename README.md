@@ -1,5 +1,9 @@
 # 🌿 Twig
 
+[![CI](https://github.com/DebrajMaji404/twig/actions/workflows/ci.yml/badge.svg)](https://github.com/DebrajMaji404/twig/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/twig-format.svg)](https://pypi.org/project/twig-format/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
 **A compact text format for nested JSON, built to cut LLM token costs.**
 
 Twig flattens repeated JSON structure — the braces, quotes, and repeated
