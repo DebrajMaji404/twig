@@ -174,3 +174,45 @@ def test_shape_marker_backward_compatible_with_unmarked_text():
     result = decode(manual_text)
     assert result == [{"name": "ffs"}]
     assert isinstance(result, list)
+
+
+def test_scientific_floats_roundtrip():
+    """Scientific notation floats (e.g. 1e-05, 2.5e+10) must decode as float,
+    and strings matching scientific notation must preserve string type."""
+    data = [
+        {"small": 1e-05, "large": 2.5e10, "neg": -3.4e-6, "std": 3.14, "int_val": 42},
+        {"small": 0.0001, "large": 1e20, "neg": -1e-4, "std": -0.5, "int_val": -10},
+    ]
+    result = roundtrip(data)
+    assert result == data
+    assert isinstance(result[0]["small"], float)
+    assert isinstance(result[0]["large"], float)
+    assert isinstance(result[0]["neg"], float)
+
+    # String literals that match scientific notation must stay strings
+    str_data = [{"text_code": "1e-05", "exp_str": "2.5e10"}]
+    str_res = roundtrip(str_data)
+    assert str_res == str_data
+    assert isinstance(str_res[0]["text_code"], str)
+
+
+def test_dotted_keys_roundtrip():
+    """JSON keys containing literal dots (e.g. 'user.name') must not be conflated
+    with nested dictionary structures and must round-trip losslessly."""
+    data = [
+        {"user.name": "Alice", "user.email": "alice@example.com", "active": True},
+        {"user.name": "Bob", "user.email": "bob@example.com", "active": False},
+    ]
+    result = roundtrip(data)
+    assert result == data
+    assert "user.name" in result[0]
+    assert "user.email" in result[0]
+
+    # Mixed nested dict and dotted keys
+    nested_data = {
+        "profile.info": {"sub.key": "value1", "normal": "value2"},
+        "root.attr": 123,
+    }
+    nested_res = roundtrip(nested_data)
+    assert nested_res == nested_data
+

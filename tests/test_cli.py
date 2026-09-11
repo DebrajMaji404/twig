@@ -48,8 +48,8 @@ def sample_json_file(tmp_path, sample_data):
 def test_encode_to_stdout(sample_json_file, sample_data):
     result = run_cli(["encode", str(sample_json_file)])
     assert result.returncode == 0
-    assert "table:root" in result.stdout
-    assert "@shape:list" in result.stdout
+    assert "T:root" in result.stdout
+    assert "~L" in result.stdout
 
 
 def test_encode_then_decode_round_trip(sample_json_file, sample_data, tmp_path):
@@ -66,7 +66,7 @@ def test_encode_then_decode_round_trip(sample_json_file, sample_data, tmp_path):
 def test_stdin_input_with_dash(sample_data):
     result = run_cli(["encode", "-"], input_text=json.dumps(sample_data))
     assert result.returncode == 0
-    assert "table:root" in result.stdout
+    assert "T:root" in result.stdout
 
 
 def test_decode_compact_flag(sample_json_file, sample_data, tmp_path):
