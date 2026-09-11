@@ -21,7 +21,12 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = [
+    "pytest>=7.0",
+    "pytest-benchmark>=4.0",
+    "tiktoken",
+    "pyyaml",
+]
 
 [project.scripts]
 twig = "twig.cli:main"
